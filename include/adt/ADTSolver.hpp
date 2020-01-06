@@ -185,6 +185,7 @@ namespace ufo
           tmp = simplifyArithm(tmp);
           ExprSet tmps;
           getConj(simplifyBool(tmp), tmps);
+
           getConj(simplifyBool(simplifyArr(tmp)), tmps); // duplicate for the case of arrays
           for (auto & t : tmps)
           {
@@ -524,22 +525,43 @@ namespace ufo
         }
 
         ExprSet stores;
+        ExprSet selects;
         getStores(subgoal, stores);
+        getSelects(subgoal, selects);
 
         if (stores.size() > 0)
         {
           if (isOpX<NEQ>(assm) && contains(subgoal, assm->left()) && contains(subgoal, assm->right()))
           {
-            ExprMap substs;
-            substs[assm->right()] = assm->left();
-            substs[assm->left()] = assm->right();
             for (auto & a : stores)
             {
               if (isOpX<STORE>(a->left()) &&
                   ((a->right() == assm->right() && a->left()->right() == assm->left()) ||
                    (a->right() == assm->left() && a->left()->right() == assm->right())))
               {
+                ExprMap substs;
+                substs[assm->right()] = assm->left();
+                substs[assm->left()] = assm->right();
+
+                Expr tmp = replaceAll(a, substs);
+                if (u.implies(assm, mk<EQ>(tmp, a)))
+                return replaceAll(subgoal, a, tmp);   // very specific heuristic; works for multisets
+
+                if (a->last() != a->left()->last())
+                {
+                  substs[a->last()] = a->left()->last();
+                  substs[a->left()->last()] = a->last();
+                }
                 return replaceAll(subgoal, a, replaceAll(a, substs));
+              }
+            }
+            for (auto & a : selects)
+            {
+              if (isOpX<STORE>(a->left()) && !isOpX<STORE>(a->left()->left()) &&
+                  ((a->right() == assm->right() && a->left()->right() == assm->left()) ||
+                   (a->right() == assm->left() && a->left()->right() == assm->right())))
+              {
+                return replaceAll(subgoal, a, mk<SELECT>(a->left()->left(), a->right()));
               }
             }
           }
@@ -1267,8 +1289,38 @@ namespace ufo
       for (int i = 1; i < indConstructor->arity() - 1; i++)
       {
         // TODO: make sure the name is unique
-        Expr s = bind::mkConst(mkTerm<string> ("_t_" + to_string(glob_ind), efac), indConstructor->arg(i));
-        glob_ind++;
+
+        Expr s;
+        Expr singleCons = NULL;
+        for (auto & a : constructors)
+        {
+          if (a->last() == indConstructor->arg(i))
+          {
+            if (singleCons != NULL)
+            {
+              singleCons = NULL;
+              break;
+            }
+            singleCons = a;
+          }
+        }
+        if (singleCons != NULL)
+        {
+          // unfold definitions, if possible
+          ExprVector argsCons;
+          for (int j = 1; j < singleCons->arity() - 1; j++)
+          {
+            argsCons.push_back(bind::mkConst(mkTerm<string> ("_t_" + to_string(glob_ind), efac), singleCons->arg(j)));
+            glob_ind++;
+          }
+          s = bind::fapp (singleCons, argsCons);
+        }
+        else
+        {
+          s = bind::mkConst(mkTerm<string> ("_t_" + to_string(glob_ind), efac), indConstructor->arg(i));
+          glob_ind++;
+        }
+
         args.push_back(s);
 
         if (type == indConstructor->arg(i)) // type check

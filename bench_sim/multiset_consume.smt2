@@ -21,15 +21,6 @@
 (assert (forall ((xs Lst) (in Elem) (s (Array Elem Int)))
   (=> (R xs s) (= (select s in) (num in xs)))))
 
-(assert (forall ((s (Array Elem Int)) (a (Elem)) (b (Elem)))
-  (=> (= (select s a) 0) (= (select (store s b 0) a) 0))))
-
-(assert (forall ((s (Array Elem Int)) (a (Elem)) (b (Elem)))
-  (=> (distinct a b) (= (select (store s a 0) b) (select s b)))))
-
-(assert (forall ((s (Array Elem Int)) (a (Elem)) (b (Elem)) (c Int) (d Int))
-  (=> (distinct a b) (= (store (store s a c) b d) (store (store s b d) a c)))))
-
 (assert (forall ((xs Lst) (a (Elem)) (b (Elem)))
   (=> (distinct a b) (= (num b (removeall a xs)) (num b xs)))))
 

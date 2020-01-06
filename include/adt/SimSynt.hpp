@@ -370,12 +370,39 @@ namespace ufo
 
         if (adtPred != NULL && arrPred != NULL)
         {
-          cnjs.insert(
+          // TODO: check vars
+          // step 1: find common occurrences in adtPred and arrPred:
+
+          ExprSet c;
+          intersect(adtPred, arrPred, c);
+          assert (!c.empty());
+
+          // step 2: make sure body uses vars from c
+          // assume c.size() == 1;
+          Expr cVar = *c.begin();
+          if (!contains(argsInd[adtVarInd], cVar))
+          {
+            ExprVector av;
+            filter (argsInd[adtVarInd], bind::IsConst (), inserter(av, av.begin()));
+            for (auto & v : av)
+            {
+              if (bind::typeOf(v) == bind::typeOf(cVar))
+              {
+                argsInd[adtVarInd] = replaceAll(argsInd[adtVarInd], v, cVar);
+                break;
+              }
+            }
+          }
+
+          nestedRel = bind::fapp (rel, argsIndNested);
+
+          Expr body =
             simplifyFormulaWithLemmas(
               replaceAll(mk<EQ>(arrPred, adtPred),
                 vars[adtVarInd], argsInd[adtVarInd]),
-                  assumptions, constructors));
-          nestedRel = bind::fapp (rel, argsIndNested);
+                  assumptions, constructors);
+
+          cnjs.insert(body);
           cnjs.insert(nestedRel);
           Expr inductiveDef = mk<EQ>(bind::fapp (rel, argsInd), conjoin(cnjs, efac));
           indRule = createQuantifiedFormula(inductiveDef);
@@ -433,6 +460,74 @@ namespace ufo
         checkConstructor(i);
       }
 
+      if (indCon == NULL)
+      {
+        for (auto & c : constructors)
+        {
+          for (int j = 0; j < c->arity() - 1; j++)
+          {
+            if (c->last() == c->arg(j))
+            {
+              // found inductive constructor
+              Expr indConstructor = c;
+              ExprVector args;
+              for (int i = 1; i < indConstructor->arity() - 1; i++)
+              {
+                Expr s;
+                if (j == i)
+                {
+                  // link to the already defined ADT (try guessing for now)
+                  for (auto & p : varVersions)
+                  {
+                    if (containsOp<AD_TY>(p.first))
+                    {
+                      s = p.first;
+                      break;
+                    }
+                  }
+                  assert(s != NULL);
+                }
+                else
+                {
+                  // should be a fresh (nonstate) var
+
+                  Expr singleCons = NULL;
+                  for (auto & a : constructors)
+                  {
+                    if (a->last() == indConstructor->arg(i))
+                    {
+                      if (singleCons != NULL)
+                      {
+                        singleCons = NULL;
+                        break;
+                      }
+                      singleCons = a;
+                    }
+                  }
+                  if (singleCons != NULL && !isIndConstructor(singleCons, indConstructor->arg(i)))
+                  {
+                    // unfold non-recursive definitions
+                    ExprVector argsCons;
+                    for (int j = 1; j < singleCons->arity() - 1; j++)
+                    {
+                      argsCons.push_back(bind::mkConst(mkTerm<string> ("_x_" + to_string(j), efac), singleCons->arg(j)));
+                    }
+                    s = bind::fapp (singleCons, argsCons);
+
+                  }
+                  else
+                  {
+                    s = bind::mkConst(mkTerm<string> ("_x_" + to_string(i), efac), indConstructor->arg(i));
+                  }
+                }
+                args.push_back(s);
+              }
+              indCon = bind::fapp(indConstructor, args);
+              break;
+            }
+          }
+        }
+      }
       adtType = bind::typeOf(indCon);
       assert(adtType == bind::typeOf(indCon));
 
@@ -440,6 +535,8 @@ namespace ufo
       if (stateConsumingOp == -1) stateConsumingOp = findStateConsumingOpInAssms();
       assert(stateProducingOp >= 0);
       assert(stateConsumingOp >= 0);
+      if (indConIndex == -1) indConIndex = stateConsumingOp;  // for the case of crafted ind constructors
+
       for (stateNoOp = 0; stateNoOp < opsAdt.size(); stateNoOp++)
       {
         if (stateNoOp != stateProducingOp &&
@@ -483,17 +580,12 @@ namespace ufo
       rel = bind::fdecl (mkTerm<string> ("R", efac), types);
       Expr baseApp = bind::fapp (rel, argsBase);
       Expr baseDef = mk<EQ>(baseApp, baseFormula);
-
       // create a quantified formula representing the base rule of R
       baseRule = createQuantifiedFormula(baseDef);
-
       // prepare for the inductive rule construction
       ExprSet indexVars;
       getCounters (opsArr[indConIndex], indexVars);
       indexVar = *indexVars.begin(); // proceed with the least one
-
-      // if indConIndex == stateConsumingOp,
-      // we require SELECTS to be expressed over primed vars (TODO: relax)
       indexVar = replaceAll(indexVar, varVersionsInverse);
 
       // identify how elements in the arrays are accessed (i.e., the indexVar)
@@ -672,7 +764,12 @@ namespace ufo
           else ++it;
         }
         if (!res)
-          pre.insert(mk<EQ>(mk<MOD>(argsInd[indexVarInd], all), mkTerm (mpz_class (i), efac)));
+        {
+          if (nonstateVars.size() > 1)
+          {
+            pre.insert(mk<EQ>(mk<MOD>(argsInd[indexVarInd], all), mkTerm (mpz_class (i), efac)));
+          }
+        }
       }
 
       if (u.isTrue(mk<EQ>(argsIndNested[indexVarInd], mk<MINUS>(argsInd[indexVarInd], all))))
@@ -724,7 +821,7 @@ namespace ufo
 
     for (auto & a : opsArr)
     {
-      if (isOpX<FORALL>(a))
+      if (containsOp<FORALL>(a))
       {
         a = regularizeQF(a);
       }

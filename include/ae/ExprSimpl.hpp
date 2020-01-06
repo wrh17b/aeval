@@ -1298,16 +1298,21 @@ namespace ufo
         {
           return simplifyArr(mk<EQ>(mk<SELECT>(exp->left(), exp->right()->right()), exp->right()->last()));
         }
+        if (isOpX<SELECT>(exp->left()) && isOpX<STORE>(exp->left()->left()) &&
+            exp->right() == exp->left()->left()->last())
+        {
+          return mk<OR>(
+            mk<EQ>(exp->left()->right(), exp->left()->left()->right()),
+            mk<EQ>(mk<SELECT>(exp->left()->left()->left(), exp->left()->right()), exp->right()));
+        }
+        if (isOpX<SELECT>(exp->right()) && isOpX<STORE>(exp->right()->left()) &&
+            exp->left() == exp->right()->left()->last())
+        {
+          return mk<OR>(
+            mk<EQ>(exp->right()->right(), exp->right()->left()->right()),
+            mk<EQ>(mk<SELECT>(exp->right()->left()->left(), exp->right()->right()), exp->left()));
+        }
       }
-
-//      if (isOpX<EQ>(exp))
-//      {
-//        if (isOpX<SELECT>(exp->left()) && )
-//        {
-//          return mk<EQ>(mk<SELECT>(exp->right(), exp->left()->right()), exp->left()->last());
-//        }
-//      }
-
       return exp;
     }
   };
@@ -1468,10 +1473,23 @@ namespace ufo
     mknary<AND>(conjs);
   }
 
+  inline void intersect(ExprVector& a, ExprVector& b, ExprSet& c){
+    for (auto &var: a)
+      if (find(b.begin(), b.end(), var) != b.end())
+        c.insert(var);
+  }
+
+  inline void intersect(Expr a, Expr b, ExprSet& c){
+    ExprVector av;
+    filter (a, bind::IsConst (), inserter(av, av.begin()));
+    ExprVector bv;
+    filter (b, bind::IsConst (), inserter(bv, bv.begin()));
+    intersect(av, bv, c);
+  }
+
   inline int intersectSize(ExprVector& a, ExprVector& b){
     ExprSet c;
-    for (auto &var: a)
-      if (find(b.begin(), b.end(), var) != b.end()) c.insert(var);
+    intersect(a, b, c);
     return c.size();
   }
 
@@ -1789,6 +1807,16 @@ namespace ufo
     } else {
       for (unsigned i = 0; i < a->arity(); i++)
         getCounters(a->arg(i), cntrs);
+    }
+  }
+
+  inline static void getSelects (Expr a, ExprSet &sels)
+  {
+    if (isOpX<SELECT>(a)){
+      sels.insert(a);
+    } else {
+      for (unsigned i = 0; i < a->arity(); i++)
+      getSelects(a->arg(i), sels);
     }
   }
 
