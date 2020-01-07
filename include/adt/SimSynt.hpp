@@ -302,30 +302,6 @@ namespace ufo
     // relations based on nonlinear scan and noops (e.g., sets, multisets)
     void guessRelations(bool alt = true)
     {
-      // prepare for the nested call of R in the inductive rule of R
-      ExprVector argsIndNested = argsInd;
-      for (int j = 0; j < types.size(); j++)
-      {
-        if (j == adtVarInd)
-        {
-          argsIndNested[j] = vars[j];
-        }
-        else if (j == arrVarInd)
-        {
-          // TODO: make sure variables are unified
-          if (alt)
-          {
-            argsIndNested[j] = opsArr[indConIndex]->right();
-            if (indConIndex == stateProducingOp)
-            {
-              argsIndNested[j] = swapPlusMinusConst(argsIndNested[j]);
-              // GF: hack, need a proper replacer
-              argsIndNested[j] = replaceAll(argsIndNested[j], mk<TRUE>(efac), mk<FALSE>(efac));
-            }
-          }
-        }
-      }
-
       // prepare the inductive definition of R (i.e., the RHS of the inductive rule)
       ExprSet cnjs;
       ExprSet transitionsArr;
@@ -370,7 +346,8 @@ namespace ufo
 
         if (adtPred != NULL && arrPred != NULL)
         {
-          // TODO: check vars
+          // prepare app for the definition of R
+          // unify vars
           // step 1: find common occurrences in adtPred and arrPred:
 
           ExprSet c;
@@ -394,6 +371,66 @@ namespace ufo
             }
           }
 
+          Expr app = bind::fapp (rel, argsInd);
+
+          // prepare for the nested call of R in the inductive rule of R
+          ExprVector argsIndNested = argsInd;
+          for (int j = 0; j < types.size(); j++)
+          {
+            if (j == adtVarInd)
+            {
+              argsIndNested[j] = vars[j];
+            }
+            else if (j == arrVarInd)
+            {
+              // TODO: make sure variables are unified
+              if (alt)
+              {
+                argsIndNested[j] = opsArr[indConIndex]->right();
+                if (indConIndex == stateProducingOp)
+                {
+                  Expr tmp = argsIndNested[j];
+                  tmp = swapPlusMinusConst(tmp);
+                  if (tmp != argsIndNested[j])
+                  {
+                    argsIndNested[j] = tmp;
+                  }
+                  else
+                  {
+                    // GF: hack, need a proper replacer
+                    tmp = replaceAll(tmp, mk<TRUE>(efac), mk<FALSE>(efac));
+                    if (tmp != argsIndNested[j])
+                    {
+                      argsIndNested[j] = tmp;
+                    }
+                    else
+                    {
+                      // complicated replacement based on noops
+
+                      ExprVector av;  // sanity check
+                      filter (adtPred, bind::IsConst (), inserter(av, av.begin()));
+                      for (auto & a : av) assert (contains (app, a)); // TODO: proper renaming
+
+                      ExprSet c;
+                      intersect(app, tmp, c);
+                      for (auto & a : c)
+                      {
+                        if (bind::typeOf(adtPred) == bind::typeOf(a))
+                        {
+                          tmp = replaceAll(tmp, a, adtPred);
+                          if (tmp != argsIndNested[j])
+                          {
+                            argsIndNested[j] = tmp;
+                            break;
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
           nestedRel = bind::fapp (rel, argsIndNested);
 
           Expr body =
@@ -404,7 +441,7 @@ namespace ufo
 
           cnjs.insert(body);
           cnjs.insert(nestedRel);
-          Expr inductiveDef = mk<EQ>(bind::fapp (rel, argsInd), conjoin(cnjs, efac));
+          Expr inductiveDef = mk<EQ>(app, conjoin(cnjs, efac));
           indRule = createQuantifiedFormula(inductiveDef);
 
           if (bind::typeOf(adtPred) == mk<BOOL_TY>(efac) &&

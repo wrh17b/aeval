@@ -757,7 +757,8 @@ namespace ufo
         if (res != NULL)
         {
           if (u.isTrue(res)) return true;
-          allAttempts[i] = res;
+          if (find (rewriteHistory.begin(), rewriteHistory.end(), res) == rewriteHistory.end())
+            allAttempts[i] = res;
         }
       }
 
