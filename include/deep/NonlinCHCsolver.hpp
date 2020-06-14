@@ -45,6 +45,11 @@ namespace ufo
 
     NonlinCHCsolver (CHCs& r) : m_efac(r.m_efac), ruleManager(r), u(m_efac) {}
 
+    void addCandidate(Expr rel, Expr cand)
+    {
+      getConj(cand, candidates[rel]);
+    }
+
     Expr quantifierElimination(Expr& cond, ExprSet& vars)
     {
       if (vars.size() == 0) return simplifyBool(cond);
@@ -591,6 +596,23 @@ namespace ufo
       }
     }
 
+    void printInvsToFile(string outfile)
+    {
+      outs () << "unsat\n";
+
+      ExprVector invs;
+      for (auto & a : candidates)
+      {
+        Expr tmp;
+        for (auto & b : ruleManager.decls)
+          if (b->left() == a.first) { tmp = b; break; }
+
+        tmp = bind::fapp(tmp, ruleManager.invVars[a.first]);
+        invs.push_back(mk<EQ>(tmp, conjoin(a.second, m_efac)));
+      }
+      u.serialize_formulas(invs, outfile);
+    }
+
     bool filterUnsat()
     {
       vector<HornRuleExt*> worklist;
@@ -870,7 +892,53 @@ namespace ufo
       return true;
     }
 
-    void guessAndSolve()
+    void repairCands(string outfile)
+    {
+      vector<HornRuleExt*> worklist;
+      for (auto & hr : ruleManager.chcs)
+      {
+        if (containsOp<ARRAY_TY>(hr.body)) hasArrays = true;
+        worklist.push_back(&hr);
+      }
+
+      multiHoudini(worklist);
+      if (checkAllOver(true))
+        return printInvsToFile(outfile);
+      else
+      {
+        outs () << "reused lemmas: ";
+        printCands(false, false);
+      }
+
+      while (true)
+      {
+        auto candidatesTmp = candidates;
+        for (bool fwd : { false, true })
+        {
+          declsVisited.clear();
+          declsVisited.insert(ruleManager.failDecl);
+          propagate(fwd);
+          filterUnsat();
+          if (fwd) multiHoudini(worklist);  // i.e., weaken
+          else strengthen();
+          if (checkAllOver(true)) return printInvsToFile(outfile);
+        }
+        if (equalCands(candidatesTmp)) break;
+      }
+
+      getImplicationGuesses(candidates);  // seems broken now; to revisit completely
+      filterUnsat();
+      multiHoudini(worklist);
+      if (checkAllOver(true)) return printInvsToFile(outfile);
+
+      for (auto tgt : ruleManager.decls) arrayGuessing(tgt->left());
+      filterUnsat();
+      multiHoudini(worklist);
+      if (checkAllOver(true)) return printInvsToFile(outfile);
+      outs () << "unknown\n";
+    }
+
+    void guessAndSolve(string outfile)
     {
       vector<HornRuleExt*> worklist;
       for (auto & hr : ruleManager.chcs)
@@ -890,7 +958,7 @@ namespace ufo
           filterUnsat();
           if (fwd) multiHoudini(worklist);  // i.e., weaken
           else strengthen();
-          if (checkAllOver(true)) return printCands();
+          if (checkAllOver(true)) return printInvsToFile(outfile);
         }
         if (equalCands(candidatesTmp)) break;
       }
@@ -898,12 +966,12 @@ namespace ufo
       getImplicationGuesses(candidates);  // seems broken now; to revisit completely
       filterUnsat();
       multiHoudini(worklist);
-      if (checkAllOver(true)) return printCands();
+      if (checkAllOver(true)) return printInvsToFile(outfile);
 
       for (auto tgt : ruleManager.decls) arrayGuessing(tgt->left());
       filterUnsat();
       multiHoudini(worklist);
-      if (checkAllOver(true)) return printCands();
+      if (checkAllOver(true)) return printInvsToFile(outfile);
       outs () << "unknown\n";
     }
 
@@ -996,17 +1064,14 @@ namespace ufo
     }
   };
 
-  inline void solveNonlin(string smt, bool inv = true)
+  inline void solveNonlin(const char * smt, const char * outfile)
   {
     ExprFactory m_efac;
     EZ3 z3(m_efac);
     CHCs ruleManager(m_efac, z3);
-    ruleManager.parse(smt);
+    ruleManager.parse(string(smt));
     NonlinCHCsolver nonlin(ruleManager);
-    if (inv)
-      nonlin.guessAndSolve();
-    else
-      nonlin.solveIncrementally();
+    nonlin.guessAndSolve(string(outfile));
   };
 }
 

@@ -4,6 +4,7 @@
 
 #include "ae/ExprSimpl.hpp"
 #include "ufo/Smt/EZ3.hh"
+#include <fstream>
 
 using namespace std;
 using namespace boost;
@@ -427,12 +428,16 @@ namespace ufo
       outs () << "(assert ";
       print (form);
       outs () << ")\n";
+    }
 
-      // old version (to  merge, maybe?)
-//      smt.reset();
-//      smt.assertExpr(form);
-//      smt.toSmtLib (outs());
-//      outs().flush ();
+    void serialize_formulas(ExprVector& form, string outfile)
+    {
+      ofstream invfile;
+      invfile.open (outfile);
+      smt.reset();
+      for (auto & f : form) smt.assertExpr(f);
+      smt.toSmtLib (invfile);
+      outs().flush ();
     }
 
     template <typename Range> bool splitUnsatSets(Range & src, ExprVector & dst1, ExprVector & dst2)

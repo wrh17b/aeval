@@ -74,7 +74,7 @@ namespace ufo
   {
     private:
     set<int> indeces;
-    string varname = "_FH_";
+    string varname;
 
     public:
 
@@ -89,7 +89,8 @@ namespace ufo
     int qCHCNum;  // index of the query in chc
     int total_var_cnt = 0;
 
-    CHCs(ExprFactory &efac, EZ3 &z3) : m_efac(efac), m_z3(z3)  {};
+    CHCs(ExprFactory &efac, EZ3 &z3) : m_efac(efac), m_z3(z3), varname("_FH_")  {};
+    CHCs(ExprFactory &efac, EZ3 &z3, string n) : m_efac(efac), m_z3(z3), varname(n)  {};
 
     bool isFapp (Expr e)
     {
@@ -299,7 +300,7 @@ namespace ufo
             origDstSymbs.push_back(*it);
         }
         allOrigSymbs.insert(allOrigSymbs.end(), origDstSymbs.begin(), origDstSymbs.end());
-        simplBoolReplCnj(allOrigSymbs, lin);
+//        simplBoolReplCnj(allOrigSymbs, lin);
         hr.body = conjoin(lin, m_efac);
         vector<ExprVector> tmp;
 
@@ -328,7 +329,7 @@ namespace ufo
         }
         hr.assignVarsAndRewrite (origSrcSymbs, tmp,
                                  origDstSymbs, invVars[hr.dstRelation]);
-        hr.body = simpleQE(hr.body, hr.locVars);
+//        hr.body = simpleQE(hr.body, hr.locVars);
 
         // GF: ideally, hr.locVars should be empty after QE,
         // but the QE procedure is imperfect, so
