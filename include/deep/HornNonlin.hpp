@@ -169,6 +169,55 @@ namespace ufo
       }
     }
 
+    bool normalize (Expr& r, HornRuleExt& hr)
+    {
+      r = regularizeQF(r);
+
+      // TODO: support more syntactic replacements
+      while (isOpX<FORALL>(r))
+      {
+        for (int i = 0; i < r->arity() - 1; i++)
+        {
+          hr.locVars.push_back(bind::fapp(r->arg(i)));
+        }
+        r = r->last();
+      }
+
+      if (isOpX<NEG>(r) && isOpX<EXISTS>(r->first()))
+      {
+        for (int i = 0; i < r->first()->arity() - 1; i++)
+          hr.locVars.push_back(bind::fapp(r->first()->arg(i)));
+
+        r = mk<IMPL>(r->first()->last(), mk<FALSE>(m_efac));
+      }
+
+      if (isOpX<NEG>(r))
+      {
+        r = mk<IMPL>(r->first(), mk<FALSE>(m_efac));
+      }
+      else if (isOpX<OR>(r) && r->arity() == 2 && isOpX<NEG>(r->left()) && hasUninterp(r->left()))
+      {
+        r = mk<IMPL>(r->left()->left(), r->right());
+      }
+      else if (isOpX<OR>(r) && r->arity() == 2 && isOpX<NEG>(r->right()) && hasUninterp(r->right()))
+      {
+        r = mk<IMPL>(r->right()->left(), r->left());
+      }
+
+      if (isOpX<IMPL>(r) && !isFapp(r->right()) && !isOpX<FALSE>(r->right()))
+      {
+        if (isOpX<TRUE>(r->right()))
+        {
+          return false;
+        }
+        r = mk<IMPL>(mk<AND>(r->left(), mk<NEG>(r->right())), mk<FALSE>(m_efac));
+      }
+
+      if (!isOpX<IMPL>(r)) r = mk<IMPL>(mk<TRUE>(m_efac), r);
+
+      return true;
+    }
+
     void parse(string smt)
     {
       std::unique_ptr<ufo::ZFixedPoint <EZ3> > m_fp;
@@ -178,78 +227,17 @@ namespace ufo
 
       for (auto &r: fp.m_rules)
       {
-        bool toReplace = false;
         chcs.push_back(HornRuleExt());
         HornRuleExt& hr = chcs.back();
-        Expr rule = r;
-        while (isOpX<FORALL>(r))
+
+        if (!normalize(r, hr))
         {
-          toReplace = true;
-          for (int i = 0; i < r->arity() - 1; i++)
-          {
-            hr.locVars.push_back(bind::fapp(r->arg(i)));
-          }
-          r = r->last();
+          chcs.pop_back();
+          continue;
         }
 
-        if (isOpX<NEG>(r) && isOpX<EXISTS>(r->first()))
-        {
-          toReplace = true;
-          for (int i = 0; i < r->first()->arity() - 1; i++)
-            hr.locVars.push_back(bind::fapp(r->first()->arg(i)));
-
-          rule = mk<IMPL>(r->first()->last(), mk<FALSE>(m_efac));
-          r = rule;
-        }
-
-        if (toReplace)
-        {
-          if (isOpX<NEG>(r))
-          {
-            rule = mk<IMPL>(r->first(), mk<FALSE>(m_efac));
-          }
-          else if (isOpX<OR>(r) && r->arity() == 2 && isOpX<NEG>(r->left()) && hasUninterp(r->left()))
-          {
-            rule = mk<IMPL>(r->left()->left(), r->right());
-          }
-          else if (isOpX<OR>(r) && r->arity() == 2 && isOpX<NEG>(r->right()) && hasUninterp(r->right()))
-          {
-            rule = mk<IMPL>(r->right()->left(), r->left());
-          }
-          else
-          {
-            rule = r;
-          }
-
-          ExprVector actual_vars;
-          expr::filter (rule, bind::IsVar(), std::inserter (actual_vars, actual_vars.begin ()));
-
-          assert(actual_vars.size() <= hr.locVars.size());
-
-          ExprVector repl_vars;
-          for (int i = 0; i < actual_vars.size(); i++)
-          {
-            string a1 = lexical_cast<string>(bind::name(actual_vars[i]));
-            int ind = hr.locVars.size() - 1 - atoi(a1.substr(1).c_str());
-            repl_vars.push_back(hr.locVars[ind]);
-          }
-          rule = replaceAll(rule, actual_vars, repl_vars);
-        }
-
-        if (isOpX<IMPL>(rule) && !isFapp(rule->right()) && !isOpX<FALSE>(rule->right()))
-        {
-          if (isOpX<TRUE>(rule->right()))
-          {
-            chcs.pop_back();
-            continue;
-          }
-          rule = mk<IMPL>(mk<AND>(rule->left(), mk<NEG>(rule->right())), mk<FALSE>(m_efac));
-        }
-
-        if (!isOpX<IMPL>(rule)) rule = mk<IMPL>(mk<TRUE>(m_efac), rule);
-
-        Expr body = rule->arg(0);
-        Expr head = rule->arg(1);
+        Expr body = r->arg(0);
+        Expr head = r->arg(1);
 
         vector<ExprVector> origSrcSymbs;
         ExprSet lin;
@@ -258,8 +246,8 @@ namespace ufo
         {
           if (hasUninterp(body))
           {
-            outs () << "Unsupported format\n";
-            outs () << "   " << *body << "\n";
+            errs () << "Unsupported format\n";
+            errs () << "   " << *body << "\n";
             exit (0);
           }
         }
@@ -300,10 +288,10 @@ namespace ufo
             origDstSymbs.push_back(*it);
         }
         allOrigSymbs.insert(allOrigSymbs.end(), origDstSymbs.begin(), origDstSymbs.end());
-//        simplBoolReplCnj(allOrigSymbs, lin);
+        simplBoolReplCnj(allOrigSymbs, lin); // perhaps, not a very important optimization now; consider removing
         hr.body = conjoin(lin, m_efac);
-        vector<ExprVector> tmp;
 
+        vector<ExprVector> tmp;
         // we may have several applications of the same predicate symbol in the body:
         for (int i = 0; i < hr.srcRelations.size(); i++)
         {
@@ -329,7 +317,7 @@ namespace ufo
         }
         hr.assignVarsAndRewrite (origSrcSymbs, tmp,
                                  origDstSymbs, invVars[hr.dstRelation]);
-//        hr.body = simpleQE(hr.body, hr.locVars);
+        hr.body = simpleQE(hr.body, hr.locVars);
 
         // GF: ideally, hr.locVars should be empty after QE,
         // but the QE procedure is imperfect, so
@@ -357,7 +345,7 @@ namespace ufo
       {
         if (failDecl != decl)
         {
-          outs () << "Multiple queries are not supported\n";
+          errs () << "Multiple queries are not supported\n";
           exit(0);
         }
       }
@@ -382,7 +370,11 @@ namespace ufo
     void print()
     {
       outs() << "CHCs:\n";
-      for (auto &hr: chcs){
+      for (auto &hr: chcs) print(hr);
+    }
+
+    void print(HornRuleExt& hr)
+    {
         if (hr.isFact) outs() << "  INIT:\n";
         if (hr.isInductive) outs() << "  TRANSITION RELATION:\n";
         if (hr.isQuery) outs() << "  BAD:\n";
@@ -406,7 +398,6 @@ namespace ufo
           outs () << "\b\b)";
         }
         outs() << "\n    body: " << * hr.body << "\n";
-      }
     }
   };
 }
