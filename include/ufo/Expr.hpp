@@ -2329,19 +2329,13 @@ namespace expr
         if (isOp<NumericOp>(v)) return typeOf(v->left());
         if (isOpX<ITE>(v)) return typeOf(v->last());
 
-        if (isOpX<STORE>(v) || isOpX<SELECT>(v))
-        {
-          Expr arrty = typeOf(v->left());
-          if (isOpX<STORE>(v)) return arrty;
-          return arrty->right();
-        }
-        return typeOf(v->left());
-        if (isOpX<SELECT>(v)) return typeOf(v->left());
+        if (isOpX<STORE>(v)) return sort::arrayTy(typeOf(v->right()), typeOf(v->last()));
+        if (isOpX<SELECT>(v)) return typeOf(v->right());
+        if (isOpX<CONST_ARRAY>(v)) return sort::arrayTy(v->left(), typeOf(v->right()));
 
-        std::cerr << "WARNING: could not infer type of: " << *v << "\n";
-        
-        assert (0 && "Unreachable");
-        return Expr();    
+//        std::cerr << "WARNING: could not infer type of: " << *v << "\n";
+//        assert (0 && "Unreachable");
+        return Expr();
       }
       inline Expr sortOf (Expr v) {return typeOf (v);}
      

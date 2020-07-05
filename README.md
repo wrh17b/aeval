@@ -6,7 +6,7 @@ Skolemizer for AE-formulas in LIA/LRA based on the Expression library of <a href
 Installation
 ============
 
-Compiles with gcc-5 (on Linux) and clang-700 (on Mac). Assumes preinstalled Gmp and Boost (libboost-system1.55-dev) packages.
+Compiles with gcc-5 (on Linux) and clang-700 (on Mac). Assumes preinstalled Gmp and Boost v1.67 packages.
 
 * `cd aeval ; mkdir build ; cd build`
 * `cmake ../`

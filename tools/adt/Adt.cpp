@@ -37,7 +37,7 @@ int main (int argc, char ** argv)
   char *infile = getSmtFileName(1, argc, argv);
   char *basecheck = getStrValue("--base", NULL, argc, argv);
   char *indcheck = getStrValue("--ind", NULL, argc, argv);
-  int maxDepth = atoi(getStrValue("--max-depth", "5", argc, argv));
+  int maxDepth = atoi(getStrValue("--max-depth", "7", argc, argv));
   int maxGrow = atoi(getStrValue("--max-grow", "2", argc, argv));
   int mergingIts = atoi(getStrValue("--merge-assms", "3", argc, argv));
   int earlySplit = atoi(getStrValue("--early-split", "1", argc, argv));

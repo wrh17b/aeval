@@ -46,7 +46,7 @@ set (BOOST_COMPONENTS system)
 if (UNIT_TESTS)
   set (BOOST_COMPONENTS ${BOOST_COMPONENTS} unit_test_framework)
 endif()
-  find_package (Boost 1.55 REQUIRED COMPONENTS ${BOOST_COMPONENTS})
+  find_package (Boost 1.67 REQUIRED COMPONENTS ${BOOST_COMPONENTS})
 if (Boost_FOUND)
   include_directories (${Boost_INCLUDE_DIRS})
 endif ()
@@ -180,9 +180,6 @@ else()
   set(GMP_LIB "")
   set(GMPXX_LIB "")
 endif()
-
-find_package(OpenMP)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
 
 install(DIRECTORY include/
   DESTINATION include

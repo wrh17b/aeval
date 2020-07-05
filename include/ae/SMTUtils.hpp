@@ -25,6 +25,13 @@ namespace ufo
     smt (z3)
     {}
 
+    Expr getModel(Expr v)
+    {
+      ExprVector eqs;
+      ZSolver<EZ3>::Model m = smt.getModel();
+      return m.eval(v);
+    }
+
     template <typename T> Expr getModel(T& vars)
     {
       ExprVector eqs;
@@ -61,28 +68,12 @@ namespace ufo
       for (auto & c : cnjs)
       {
         filter (c, bind::IsConst (), inserter (allVars, allVars.begin()));
-        if (isOpX<FORALL>(c))
-        {
-          ExprVector varz;
-          for (int i = 0; i < c->arity() - 1; i++)
-          {
-            varz.push_back(bind::fapp(c->arg(i)));
-          }
-          smt.assertForallExpr(varz, c->last());
-        }
-        else if (isOpX<EXISTS>(c))
-        {
-          smt.assertExpr(c->last());
-        }
-        else
-        {
-          if (containsOp<FORALL>(c)) return logic::indeterminate;
-          smt.assertExpr(c);
-        }
+        smt.assertExpr(c);
       }
       boost::tribool res = smt.solve ();
       return res;
     }
+
     /**
      * SMT-check
      */
@@ -119,7 +110,7 @@ namespace ufo
     {
       if (isOpX<TRUE>(b)) return true;
       if (isOpX<FALSE>(a)) return true;
-      return ! isSat(a, mkNeg(b));
+      return bool(!isSat(a, mkNeg(b)));
     }
 
     /**
@@ -127,7 +118,7 @@ namespace ufo
      */
     bool isTrue(Expr a){
       if (isOpX<TRUE>(a)) return true;
-      return !isSat(mkNeg(a));
+      return bool(!isSat(mkNeg(a)));
     }
 
     /**
@@ -135,7 +126,8 @@ namespace ufo
      */
     bool isFalse(Expr a){
       if (isOpX<FALSE>(a)) return true;
-      return !isSat(a);
+      if (isOpX<NEQ>(a) && a->left() == a->right()) return true;
+      return bool(!isSat(a));
     }
 
     /**
@@ -151,7 +143,7 @@ namespace ufo
       ExprSet assumptions;
       assumptions.insert(mk<NEQ>(v, val));
 
-      return (!isSat(assumptions, false));
+      return bool((!isSat(assumptions, false)));
     }
 
     /**
@@ -201,8 +193,7 @@ namespace ufo
                        simplifyITE(br1, cond),
                        simplifyITE(br2, mk<NEG>(cond)));
 
-      }
-      else if (isOpX<IMPL>(ex)) {
+      } else if (isOpX<IMPL>(ex)) {
 
         return mk<IMPL>(simplifyITE(ex->left()), simplifyITE(ex->right()));
       } else if (isOpX<AND>(ex) || isOpX<OR>(ex)){
@@ -231,9 +222,7 @@ namespace ufo
           newCnjs.erase(cnj);
           continue;
         }
-        
-        ExprSet old;
-        for (Expr e: newCnjs) old.insert(e);
+
         ExprSet newCnjsTry = newCnjs;
         newCnjsTry.erase(cnj);
         
@@ -252,7 +241,9 @@ namespace ufo
           }
         }
       }
-      conjs = newCnjs;
+      conjs.clear();
+      for (auto & cnj : newCnjs)
+        conjs.insert(removeRedundantDisjuncts(cnj));
     }
 
     /**
@@ -334,11 +325,11 @@ namespace ufo
       else if (bind::isBoolConst(var))
         return "Bool";
       else if (bind::isConst<ARRAY_TY> (var))
-        return "(Array Int Int)";
-      else if (bind::isConst<AD_TY> (var))
       {
-        string str = lexical_cast<std::string>(var->last()->last());
-        return str.substr(1, str.length() - 2);
+        Expr name = mkTerm<string> ("", var->getFactory());
+        Expr s1 = bind::mkConst(name, var->last()->right()->left());
+        Expr s2 = bind::mkConst(name, var->last()->right()->right());
+        return string("(Array ") + varType(s1) + string(" ") + varType(s2) + string(")");
       }
       else return "";
     }
@@ -353,9 +344,10 @@ namespace ufo
         for (int i = 0; i < e->arity() - 1; i++)
         {
           Expr var = bind::fapp(e->arg(i));
-          outs () << "(" << *var << " " << varType(var) << ") ";
+          outs () << "(" << *var << " " << varType(var) << ")";
+          if (i != e->arity() - 2) outs () << " ";
         }
-        outs () << "\b) ";
+        outs () << ") ";
         print (e->last());
         outs () << ")";
       }
@@ -364,24 +356,28 @@ namespace ufo
         outs () << "(and ";
         ExprSet cnjs;
         getConj(e, cnjs);
+        int i = 0;
         for (auto & c : cnjs)
         {
+          i++;
           print(c);
-          outs () << " ";
+          if (i != cnjs.size()) outs () << " ";
         }
-        outs () << "\b)";
+        outs () << ")";
       }
       else if (isOpX<OR>(e))
       {
         outs () << "(or ";
         ExprSet dsjs;
         getDisj(e, dsjs);
+        int i = 0;
         for (auto & d : dsjs)
         {
+          i++;
           print(d);
-          outs () << " ";
+          if (i != dsjs.size()) outs () << " ";
         }
-        outs () << "\b)";
+        outs () << ")";
       }
       else if (isOpX<IMPL>(e) || isOp<ComparissonOp>(e))
       {

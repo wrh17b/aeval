@@ -3,6 +3,7 @@
 #include <assert.h>
 #include <string.h>
 
+#include "ae/AeValSolver.hpp"
 #include "ae/SMTUtils.hpp"
 #include "ufo/Smt/EZ3.hh"
 
@@ -65,6 +66,36 @@ namespace ufo
       return false;
     }
 
+    Expr eliminateEqualities(Expr goal)
+    {
+      ExprMap allrepls;
+      for (auto it = assumptions.begin(); it != assumptions.end();)
+      {
+        Expr &a = *it;
+        if (isOpX<EQ>(a) && allrepls[a->left()] == NULL &&
+            isOpX<FAPP> (a->left()) && a->left()->arity () == 1 &&
+            isOpX<FAPP> (a->right()) && a->right()->arity () == 1)
+        {
+          if (verbose) outs () << string(sp, ' ') << "replacing   " << *a->left()
+                               << "   by   " << * a->right() << "   everywhere\n";
+          allrepls[a->left()] = a->right();
+          it = assumptions.erase(it);
+        }
+        else ++it;
+      }
+      if (allrepls.size() == 0) return goal;
+
+      for (auto & a : assumptions)
+      {
+        if (!isOpX<FORALL>(a)) // TODO: support FORALLs properly
+        {
+          a = replaceAll(a, allrepls);
+        }
+      }
+
+      return replaceAll(goal, allrepls);
+    }
+
     bool mergeAssumptions(int bnd = -1)
     {
       // simplify them first
@@ -113,8 +144,13 @@ namespace ufo
         }
         assumptions.clear();
         for (auto & a : newAssms)
+        {
+          // some blocking heurisitcs here (TODO: try to block them in early stages, i.e., don't even compute)
+          if (isOpX<EQ>(a) && isOpX<AND>(a->left()) /*&& isOpX<AND>(a->right())*/) continue;
+
           if (find (blockedAssms.begin(), blockedAssms.end(), a) == blockedAssms.end())
             unique_push_back(a, assumptions);
+        }
       }
       return false;
     }
@@ -147,6 +183,7 @@ namespace ufo
             return true;
           }
 
+          tmp = simplifyArithm(tmp);
           ExprSet tmps;
           getConj(simplifyBool(tmp), tmps);
           getConj(simplifyBool(simplifyArr(tmp)), tmps); // duplicate for the case of arrays
@@ -340,7 +377,6 @@ namespace ufo
         if (isOpX<EQ>(assmQF))
         {
           matching.clear();
-
           // if the assumption is equality, the we search for a matching of its LHS
           // (we can try matching the RHS as well, but it will likely give us infinite loops)
           if (findMatchingSubexpr (assmQF->left(), subgoal, args, matching))
@@ -348,18 +384,37 @@ namespace ufo
             repl = replaceAll(repl, matching);
             return replaceAll(subgoal, repl->left(), repl->right());
           }
+          // try vice versa (dangerous since it will introduce repeated rewriting)
+          matching.clear();
+          if (!fwd && findMatchingSubexpr (assmQF->right(), subgoal, args, matching))
+          {
+            repl = replaceAll(repl, matching);
+            return replaceAll(subgoal, repl->right(), repl->left());
+          }
         }
 
-        if ((isOpX<LEQ>(assmQF) && isOpX<LEQ>(subgoal)) ||
-            (isOpX<GEQ>(assmQF) && isOpX<GEQ>(subgoal)) ||
-            (isOpX<LT>(assmQF) && isOpX<LT>(subgoal)) ||
-            (isOpX<GT>(assmQF) && isOpX<GT>(subgoal)))
+        if (isOp<ComparissonOp>(assmQF) && isOp<ComparissonOp>(subgoal))
         {
-          if (findMatchingSubexpr (assmQF->left(), subgoal->left(), args, matching))
+          Expr assmQFtmp = assmQF;
+          Expr subgoalTmp = subgoal;
+          assmQF = normalizeArithm(assmQF);
+          subgoal = normalizeArithm(subgoal);
+
+          if (findMatching (assmQF->left(), subgoal->left(), args, matching))
           {
-            for (auto & a : matching) repl = replaceAll(repl, a.first, a.second);
-            if (u.implies(repl, subgoal)) return mk<TRUE>(efac);
+            repl = replaceAll(assmQF, matching);
+            if (fwd && !u.isSat(repl, subgoal)) return mk<FALSE>(efac);
+            if (fwd)
+            {
+              if (((isOpX<LEQ>(repl) && isOpX<GEQ>(subgoal)) || (isOpX<GEQ>(repl) && isOpX<LEQ>(subgoal))) &&
+                  (repl->left() == subgoal->left()) && (repl->right() == subgoal->right()))
+                return mk<EQ>(repl->left(), subgoal->right());
+            }
+            if (!fwd && u.implies(repl, subgoal)) return mk<TRUE>(efac);
           }
+          matching.clear();
+          assmQF = assmQFtmp;
+          subgoal = subgoalTmp;
         }
 
         if (isOpX<ITE>(subgoal))
@@ -373,7 +428,7 @@ namespace ufo
         }
 
         // try finding inconsistencies
-        if (fwd)
+        if (fwd && !containsOp<FORALL>(assmQF))
         {
           ExprMap matching1;
           ExprVector args1;
@@ -406,10 +461,8 @@ namespace ufo
         // for a quantifier-free assumption (e.g., inductive hypotheses),
         // we create an SMT query and check with Z3
         // TODO: we can do so for ALL constistent quantifier-free assumptions at once
-        if (!fwd && u.implies(assm, subgoal)) return mk<TRUE>(efac);
-        if (fwd && !u.isSat(assm, subgoal)) return mk<FALSE>(efac);
 
-        if (isOpX<EQ>(assm))
+        if (isOpX<EQ>(assm)) // simple (SMT-free) checks first
         {
           Expr res = replaceAll(subgoal, assm->left(), assm->right());
           if (res != subgoal)
@@ -417,6 +470,20 @@ namespace ufo
             return res;
           }
         }
+
+        if (!fwd && u.implies(assm, subgoal)) return mk<TRUE>(efac);
+        if (fwd && !u.isSat(assm, subgoal)) return mk<FALSE>(efac);
+
+        if (!fwd && isOp<ComparissonOp>(subgoal) && isOp<ComparissonOp>(assm) &&
+            isNumeric(subgoal->left()) && isNumeric(assm->left()))
+        {
+          Expr tryAbd = abduce(subgoal, assm);
+          if (tryAbd != NULL)
+          {
+            return tryAbd;
+          }
+        }
+
         // TODO: proper matching
         if (isOpX<IMPL>(subgoal) && u.implies(subgoal->left(), assm))
         {
@@ -455,23 +522,58 @@ namespace ufo
           }
         }
 
+        if (isOp<ComparissonOp>(assm))
+        {
+          Expr res = replaceAll(subgoal, assm, mk<TRUE>(efac));
+          res = replaceAll(res, mkNeg(assm), mk<FALSE>(efac));
+          Expr tmp = reBuildCmpSym(assm, assm->left(), assm->right());
+          assert(u.isEquiv(assm, tmp));
+          res = replaceAll(res, tmp, mk<TRUE>(efac));
+          res = replaceAll(res, mkNeg(tmp), mk<FALSE>(efac));
+          if (res != subgoal)
+          {
+            return simplifyBool(res);
+          }
+        }
+
         ExprSet stores;
+        ExprSet selects;
         getStores(subgoal, stores);
+        getSelects(subgoal, selects);
 
         if (stores.size() > 0)
         {
           if (isOpX<NEQ>(assm) && contains(subgoal, assm->left()) && contains(subgoal, assm->right()))
           {
-            ExprMap substs;
-            substs[assm->right()] = assm->left();
-            substs[assm->left()] = assm->right();
             for (auto & a : stores)
             {
               if (isOpX<STORE>(a->left()) &&
                   ((a->right() == assm->right() && a->left()->right() == assm->left()) ||
                    (a->right() == assm->left() && a->left()->right() == assm->right())))
               {
+                ExprMap substs;
+                substs[assm->right()] = assm->left();
+                substs[assm->left()] = assm->right();
+
+                Expr tmp = replaceAll(a, substs);
+                if (u.implies(assm, mk<EQ>(tmp, a)))
+                return replaceAll(subgoal, a, tmp);   // very specific heuristic; works for multisets
+
+                if (a->last() != a->left()->last())
+                {
+                  substs[a->last()] = a->left()->last();
+                  substs[a->left()->last()] = a->last();
+                }
                 return replaceAll(subgoal, a, replaceAll(a, substs));
+              }
+            }
+            for (auto & a : selects)
+            {
+              if (isOpX<STORE>(a->left()) && !isOpX<STORE>(a->left()->left()) &&
+                  ((a->right() == assm->right() && a->left()->right() == assm->left()) ||
+                   (a->right() == assm->left() && a->left()->right() == assm->right())))
+              {
+                return replaceAll(subgoal, a, mk<SELECT>(a->left()->left(), a->right()));
               }
             }
           }
@@ -573,10 +675,12 @@ namespace ufo
         uniquePushConj(subgoal->left(), assumptions);
         if (assumptions.size() != assumptionsTmp.size())
         {
+          subgoal = eliminateEqualities(subgoal);
           toRem = true;
           if (mergeAssumptions())
           {
             assumptions = assumptionsTmp;
+            if (verbose) outs() << string(sp, ' ') << "proven (merge assms after impl)\n";
             return true;
           }
           printAssumptions();
@@ -594,6 +698,7 @@ namespace ufo
       subgoal = u.simplifyITE(subgoal);
       subgoal = simplifyExists(subgoal);
       subgoal = simplifyArr(subgoal);
+      subgoal = simplifyArithm(subgoal);
       subgoal = simplifyBool(subgoal);
 
       ExprSet subSub;
@@ -664,8 +769,13 @@ namespace ufo
         Expr res = useAssumption(subgoal, a);
         if (res != NULL)
         {
-          if (u.isTrue(res)) return true;
-          allAttempts[i] = res;
+          if (u.isTrue(res))
+          {
+            if (verbose) outs () << string(sp, ' ') << "rewritten [" << i << "]\n";
+            return true;
+          }
+          if (find (rewriteHistory.begin(), rewriteHistory.end(), res) == rewriteHistory.end())
+            allAttempts[i] = res;
         }
       }
 
@@ -770,6 +880,7 @@ namespace ufo
       auto assumptionsTmp = assumptions;
       uniquePushConj(mkNeg(subgoal), assumptions);
       bool res = false;
+      subgoal = eliminateEqualities(subgoal);
       if (mergeAssumptions(1))
       {
         res = true;
@@ -806,6 +917,7 @@ namespace ufo
       auto assumptionsTmp = assumptions;
 
       uniquePushConj(mkNeg(*spl), assumptions);
+      subgoal = eliminateEqualities(subgoal);
       if (mergeAssumptions())
       {
         assumptions = assumptionsTmp;
@@ -955,6 +1067,7 @@ namespace ufo
       int part = 1;
       bool res = true;
 
+      auto subgoalTmp = subgoal;
       auto assumptionsTmp = assumptions;
       auto rewriteHistoryTmp = rewriteHistory;
       auto rewriteSequenceTmp = rewriteSequence;
@@ -964,8 +1077,10 @@ namespace ufo
         if (verbose) outs () << string(sp, ' ') << "split for (part " << part << "/"
             << spl.size()<< "): " << *s << "\n" << string(sp, ' ') << "{\n";
         sp += 2;
+        part++;
 
         uniquePushConj(s, assumptions);
+        subgoal = eliminateEqualities(subgoal);
         if (mergeAssumptions())
         {
           assumptions = assumptionsTmp;
@@ -983,8 +1098,6 @@ namespace ufo
         }
         printAssumptions();
 
-        part++;
-
         res = rewriteAssumptions(subgoal);
         sp -= 2;
         if (verbose) outs () << string(sp, ' ') << "}\n";
@@ -992,6 +1105,7 @@ namespace ufo
         rewriteHistory = rewriteHistoryTmp;
         rewriteSequence = rewriteSequenceTmp;
         assumptions = assumptionsTmp;
+        subgoal = subgoalTmp;
         if (!res) break;
       }
 
@@ -1143,6 +1257,7 @@ namespace ufo
 
       if (verbose) outs() << "\nBase case:       " << *baseSubgoal << "\n{\n";
       bool baseres = false;
+      baseSubgoal = eliminateEqualities(baseSubgoal);
       if (mergeAssumptions())
       {
         if (verbose) outs() << "  proven trivially\n";
@@ -1195,8 +1310,38 @@ namespace ufo
       for (int i = 1; i < indConstructor->arity() - 1; i++)
       {
         // TODO: make sure the name is unique
-        Expr s = bind::mkConst(mkTerm<string> ("_t_" + to_string(glob_ind), efac), indConstructor->arg(i));
-        glob_ind++;
+
+        Expr s;
+        Expr singleCons = NULL;
+        for (auto & a : constructors)
+        {
+          if (a->last() == indConstructor->arg(i))
+          {
+            if (singleCons != NULL)
+            {
+              singleCons = NULL;
+              break;
+            }
+            singleCons = a;
+          }
+        }
+        if (singleCons != NULL)
+        {
+          // unfold definitions, if possible
+          ExprVector argsCons;
+          for (int j = 1; j < singleCons->arity() - 1; j++)
+          {
+            argsCons.push_back(bind::mkConst(mkTerm<string> ("_t_" + to_string(glob_ind), efac), singleCons->arg(j)));
+            glob_ind++;
+          }
+          s = bind::fapp (singleCons, argsCons);
+        }
+        else
+        {
+          s = bind::mkConst(mkTerm<string> ("_t_" + to_string(glob_ind), efac), indConstructor->arg(i));
+          glob_ind++;
+        }
+
         args.push_back(s);
 
         if (type == indConstructor->arg(i)) // type check
@@ -1224,9 +1369,6 @@ namespace ufo
         // always add symmetric IH?
         insertSymmetricAssumption(a);
       }
-      // for simplicity, add conjunction of hypotheses as a single hypothesis
-      // should be removed in the future (when all QF-assumptions are used at the same time)
-      if (indHypotheses.size() > 1 && allQF) assumptions.push_back(conjoin(indHypotheses, efac));
 
       // prove the inductive step
       Expr indConsApp = bind::fapp(indConstructor, args);
@@ -1238,6 +1380,7 @@ namespace ufo
         indSubgoal = indSubgoal->right();
       }
 
+      indSubgoal = eliminateEqualities(indSubgoal);
       if (mergeAssumptions()) return true;
 
       splitAssumptions();
@@ -1321,6 +1464,7 @@ namespace ufo
               assumptions[j] = replaceAll(assumptions[j], d->left(), d->right());
             }
 
+            goal = eliminateEqualities(goal);
             mergeAssumptions(1);
             printAssumptions();
             bool partiallyDone = rewriteAssumptions(replaceAll(goal, d->left(), d->right()));
@@ -1341,6 +1485,7 @@ namespace ufo
               assumptions[j] = simplifyBool(replaceAll(assumptions[j], pre, mk<TRUE>(efac)));
               assumptions[j] = replaceAll(assumptions[j], pre->left(), pre->right());
             }
+            goal = eliminateEqualities(goal);
             mergeAssumptions(1);
             printAssumptions();
             bool done = rewriteAssumptions(replaceAll(goal, pre->left(), pre->right()));
@@ -1409,6 +1554,7 @@ namespace ufo
     bool solveNoind(int rounds = 2)
     {
       auto assumptionsTmp = assumptions;
+      goal = eliminateEqualities(goal);
       mergeAssumptions(rounds);
       printAssumptions();
       if (verbose) outs () << "=====\n" << *goal << "\n\n\n";
