@@ -102,7 +102,7 @@ namespace ufo
     }
   };
 
-  inline void simAbs(const char * chcfileSrc, const char * chcfileDst, const char * invfileSrc, const char * invfileDst)
+  inline void simAbs(const char * chcfileSrc, const char * chcfileDst, const char * invfileSrc, const char * invfileDst, int stren)
   {
     ExprFactory m_efac;
     EZ3 z3(m_efac);
@@ -125,7 +125,7 @@ namespace ufo
     SimAbs sim(ruleManagerSrc, ruleManagerDst);
     sim.findMatching();
 
-    NonlinCHCsolver nonlinDst(ruleManagerDst);
+    NonlinCHCsolver nonlinDst(ruleManagerDst, stren);
     ExprSet invs;
     getConj(invTmp, invs);
     for (auto & a : invs)

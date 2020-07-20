@@ -12,6 +12,19 @@ static inline bool getBoolValue(const char * opt, bool defValue, int argc, char 
   return defValue;
 }
 
+int getIntValue(const char * opt, int defValue, int argc, char ** argv)
+{
+  for (int i = 1; i < argc-1; i++)
+  {
+    if (strcmp(argv[i], opt) == 0)
+    {
+      return atoi(argv[i+1]);
+    }
+  }
+  return defValue;
+}
+
+
 const char * getStrValue(const char * opt, const char * defValue, int argc, char ** argv)
 {
   for (int i = 1; i < argc-1; i++)
@@ -34,12 +47,14 @@ int main (int argc, char ** argv)
         " freqn [--help]                   show help\n" <<
         " freqn [options] <file.smt2>      discover invariants for a system of constrained Horn clauses\n\n" <<
         "Options:\n" <<
+        "  --stren                         number of strengthening iterations (by default, 1) \n" <<
         "  --out                           output invariants file                         \n";
 
     return 0;
   }
+  int str = getIntValue("--stren", 1, argc, argv);
   const char *OUT_FILE = "_invs.smt2";
   const char * out = getStrValue("--out", OUT_FILE, argc, argv);
-  solveNonlin(argv[argc-1], out);
+  solveNonlin(argv[argc-1], out, str);
   return 0;
 }
