@@ -113,7 +113,7 @@ namespace ufo
 
     void preproGuessing(Expr e, ExprVector& ev1, ExprVector& ev2, ExprSet& guesses, bool backward = false, bool mutate = true)
     {
-      e = rewriteSelectStore(e);
+      if (!containsOp<FORALL>(e)) e = rewriteSelectStore(e);
       ExprSet complex;
       findComplexNumerics(e, complex);
       ExprMap repls;

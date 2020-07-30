@@ -143,6 +143,20 @@ namespace ufo
     }
   }
 
+  inline static void getChainOfStores (Expr a, ExprSet &stores)
+  {
+    if (isOp<STORE>(a))
+    {
+      stores.insert(a);
+      getChainOfStores(a->left(), stores);
+    }
+    else if (isOpX<ITE>(a))
+    {
+      for (unsigned i = 1; i <= 2; i++)
+        getChainOfStores(a->arg(i), stores);
+    }
+  }
+
   inline static void getMultOps (Expr a, ExprVector &ops)
   {
     if (isOpX<MULT>(a)){
@@ -751,6 +765,7 @@ namespace ufo
         else
           rem.push_back(a);
       }
+
       Expr num = mkMPZ (coef, e->getFactory());
       if (rem.empty() || coef == 0) return num;
 
@@ -786,42 +801,60 @@ namespace ufo
     ExprFactory &efac = exp->getFactory();
     ExprVector plusOpsLeft;
     ExprVector plusOpsRight;
-    getAddTerm(exp->right(), plusOpsLeft);
-    getAddTerm(exp->last(), plusOpsRight);
-
     ExprVector commonTerms;
-    for (auto it1 = plusOpsLeft.begin(); it1 != plusOpsLeft.end(); )
+    Expr b1;
+    Expr b2;
+    bool added = false;
+    if (isNumeric(exp->right()))
     {
-      bool found = false;
-      for (auto it2 = plusOpsRight.begin(); it2 != plusOpsRight.end(); )
-      {
-        if (*it1 == *it2)
-        {
-          if (lexical_cast<string>(*it1) != "0")
-            commonTerms.push_back(*it1);
-          found = true;
-          plusOpsRight.erase(it2);
-          break;
-        }
-        else
-        {
-          ++it2;
-        }
-      }
-      if (found) it1 = plusOpsLeft.erase(it1);
-      else ++it1;
-    }
+      getAddTerm(exp->right(), plusOpsLeft);
+      getAddTerm(exp->last(), plusOpsRight);
 
-    Expr b1 = simplifyPlus(mkplus(plusOpsLeft, efac));
-    Expr b2 = simplifyPlus(mkplus(plusOpsRight, efac));
-    if (b1 == b2)
-    {
-      if (lexical_cast<string>(b1) != "0")
-        commonTerms.push_back(b1);
+      for (auto it1 = plusOpsLeft.begin(); it1 != plusOpsLeft.end(); )
+      {
+        bool found = false;
+        for (auto it2 = plusOpsRight.begin(); it2 != plusOpsRight.end(); )
+        {
+          if (*it1 == *it2)
+          {
+            if (lexical_cast<string>(*it1) != "0")
+              commonTerms.push_back(*it1);
+            found = true;
+            plusOpsRight.erase(it2);
+            break;
+          }
+          else
+          {
+            ++it2;
+          }
+        }
+        if (found) it1 = plusOpsLeft.erase(it1);
+        else ++it1;
+      }
+
+      b1 = simplifyPlus(mkplus(plusOpsLeft, efac));
+      b2 = simplifyPlus(mkplus(plusOpsRight, efac));
+      if (b1 == b2)
+      {
+        if (lexical_cast<string>(b1) != "0")
+          commonTerms.push_back(b1);
+        added = true;
+      }
     }
     else
     {
-      commonTerms.push_back(mk<ITE>(exp->left(), b1, b2));
+      b1 = exp->right();
+      b2 = exp->last();
+    }
+
+    if (!added) // some redundancy with the ITE-handling in simplifyBool
+    {
+      if (isOpX<TRUE>(exp->left()))
+        commonTerms.push_back(b1);
+      else if (isOpX<FALSE>(exp->left()))
+        commonTerms.push_back(b2);
+      else
+        commonTerms.push_back(mk<ITE>(exp->left(), b1, b2));
     }
     return mkplus(commonTerms, efac);
   }
@@ -1209,6 +1242,78 @@ namespace ufo
     }
   };
 
+  static Expr simplifyArr (Expr exp);
+
+  struct SimplifyArrExpr
+  {
+    SimplifyArrExpr () {};
+
+    Expr operator() (Expr exp)
+    {
+      // GF: to enhance
+
+      if (isOpX<STORE>(exp))
+      {
+        ExprSet stores;
+        getChainOfStores(exp->left(), stores);
+        for (auto s : stores)
+          if (exp->right() == s->right()) // cell overwritten
+            exp = replaceAll(exp, s, s->left());
+      }
+
+      if (isOpX<SELECT>(exp))
+      {
+        if (isOpX<STORE>(exp->left()) && exp->right() == exp->left()->right())
+        {
+          return exp->left()->last();
+        }
+        if (isOpX<STORE>(exp->left()) && // exp->right() != exp->left()->right() &&
+            bind::typeOf(exp->left())->last() == mk<BOOL_TY> (exp->efac ()))
+        {
+          return mk<OR>(
+            mk<AND>(mk<EQ>(exp->right(), exp->left()->right()),
+                    exp->left()->last()),
+            mk<AND>(mk<NEQ>(exp->right(), exp->left()->right()),
+                    mk<SELECT>(exp->left()->left(), exp->last())));
+        }
+      }
+
+      if (isOpX<EQ>(exp))
+      {
+        if (isOpX<STORE>(exp->left()) && exp->right() == exp->left()->left())
+        {
+          return simplifyArr(mk<EQ>(mk<SELECT>(exp->right(), exp->left()->right()), exp->left()->last()));
+        }
+        if (isOpX<STORE>(exp->right()) && exp->left() == exp->right()->left())
+        {
+          return simplifyArr(mk<EQ>(mk<SELECT>(exp->left(), exp->right()->right()), exp->right()->last()));
+        }
+        if (isOpX<SELECT>(exp->left()) && isOpX<STORE>(exp->left()->left()) &&
+            exp->right() == exp->left()->left()->last())
+        {
+          return mk<OR>(
+            mk<EQ>(exp->left()->right(), exp->left()->left()->right()),
+            mk<EQ>(mk<SELECT>(exp->left()->left()->left(), exp->left()->right()), exp->right()));
+        }
+        if (isOpX<SELECT>(exp->right()) && isOpX<STORE>(exp->right()->left()) &&
+            exp->left() == exp->right()->left()->last())
+        {
+          return mk<OR>(
+            mk<EQ>(exp->right()->right(), exp->right()->left()->right()),
+            mk<EQ>(mk<SELECT>(exp->right()->left()->left(), exp->right()->right()), exp->left()));
+        }
+      }
+      return exp;
+    }
+  };
+
+  inline static Expr simplifyArr (Expr exp)
+  {
+    if (containsOp<FORALL>(exp) || containsOp<EXISTS>(exp)) return exp;
+    RW<SimplifyArrExpr> rw(new SimplifyArrExpr());
+    return dagVisit (rw, exp);
+  }
+
   inline static Expr simplifyArithm (Expr exp, bool keepRedundandDisj = false, bool keepRedundandConj = false)
   {
     RW<SimplifyArithmExpr> rw(new
@@ -1347,12 +1452,12 @@ namespace ufo
     return isOpX<MPZ>(e) || isOpX<MPQ>(e);
   }
 
-  template<typename Range> static int getVarIndex(Expr var, Range& vec)
+  template <typename T, typename R> static int getVarIndex(T e, R& vec)
   {
     int i = 0;
-    for (auto &e: vec)
+    for (auto & v : vec)
     {
-      if (var == e) return i;
+      if (v == e) return i;
       i++;
     }
     return -1;
@@ -1433,13 +1538,13 @@ namespace ufo
       {
         Expr lhs = exp->left();
         Expr rhs = exp->right();
-        
+
         ExprVector alllhs;
         getAddTerm(lhs, alllhs);
-        
+
         ExprVector allrhs;
         getAddTerm(rhs, allrhs);
-        
+
         ExprVector unf;
         for (auto &a : alllhs)
         {
@@ -1450,7 +1555,7 @@ namespace ufo
         }
         return mkplus(unf, exp->getFactory());
       }
-      
+
       return exp;
     }
   };
@@ -1820,7 +1925,7 @@ namespace ufo
       Expr iteCond = unfoldITE (term->arg(0));
       Expr iteC1 = unfoldITE (term->arg(1));
       Expr iteC2 = unfoldITE (term->arg(2));
-      
+
       return mk<OR>( mk<AND>(iteCond, iteC1),
                     mk<AND>(mkNeg(iteCond), iteC2));
     }
@@ -1841,19 +1946,19 @@ namespace ufo
     {
       Expr lhs = term->arg(0);
       Expr rhs = term->arg(1);
-      
+
       if (isOpX<ITE>(rhs))
       {
         Expr iteCond = unfoldITE (rhs->arg(0));
         Expr iteC1 = rhs->arg(1);
         Expr iteC2 = rhs->arg(2);
-        
+
         Expr newCmp1 = unfoldITE (reBuildCmp(term, lhs, iteC1));
         Expr newCmp2 = unfoldITE (reBuildCmp(term, lhs, iteC2));
-        
+
         Expr transformed = mk<OR>( mk<AND>(iteCond, newCmp1),
                                   mk<AND>(mkNeg(iteCond), newCmp2));
-        
+
         //          outs () << "     [1b] ---> " << *term << "\n";
         //          outs () << "     [1e] ---> " << *transformed << "\n\n";
         return transformed;
@@ -1861,17 +1966,17 @@ namespace ufo
       else if (isOpX<ITE>(lhs))
       {
         // GF: symmetric case to the one above
-        
+
         Expr iteCond = unfoldITE (lhs->arg(0));
         Expr iteC1 = lhs->arg(1);
         Expr iteC2 = lhs->arg(2);
-        
+
         Expr newCmp1 = unfoldITE (reBuildCmp(term, iteC1, rhs));
         Expr newCmp2 = unfoldITE (reBuildCmp(term, iteC2, rhs));
-        
+
         Expr transformed = mk<OR>( mk<AND>(iteCond, newCmp1),
                                   mk<AND>(mkNeg(iteCond), newCmp2));
-        
+
         //          outs () << "    [2b] ---> " << *term << "\n";
         //          outs () << "    [2e] ---> " << *transformed << "\n\n";
         return transformed;
@@ -1884,7 +1989,7 @@ namespace ufo
         for (auto it = rhs->args_begin(), end = rhs->args_end(); it != end; ++it)
         {
           // make sure that only one ITE is found
-          
+
           if (!found && isOpX<ITE>(*it))
           {
             found = true;
@@ -1900,20 +2005,20 @@ namespace ufo
           Expr iteCond = unfoldITE (iteArg->arg(0));
           Expr iteC1 = iteArg->arg(1);
           Expr iteC2 = iteArg->arg(2);
-          
+
           newArgs.push_back(iteC1);
           Expr e1 = unfoldITE (reBuildCmp(term, lhs, mknary<PLUS>(newArgs))); // GF: "unfoldITE" gives error...
-          
+
           newArgs.pop_back();
           newArgs.push_back(iteC2);
           Expr e2 = unfoldITE (reBuildCmp(term, lhs, mknary<PLUS>(newArgs)));
-          
+
           Expr transformed = mk<OR>(mk<AND>(iteCond, e1),
                                     mk<AND>(mkNeg(iteCond),e2));
-          
+
           //            outs () << "    [3b] ---> " << *term << "\n";
           //            outs () << "    [3e] ---> " << *transformed << "\n\n";
-          
+
           return transformed;
         }
       }
@@ -1935,26 +2040,26 @@ namespace ufo
             newArgs.push_back(*it);
           }
         }
-        
+
         if (found)
         {
           Expr iteCond = unfoldITE (iteArg->arg(0));
           Expr iteC1 = iteArg->arg(1);
           Expr iteC2 = iteArg->arg(2);
-          
+
           newArgs.push_back(iteC1);
           Expr e1 = unfoldITE (reBuildCmp(term, mknary<PLUS>(newArgs), rhs));
-          
+
           newArgs.pop_back();
           newArgs.push_back(iteC2);
           Expr e2 = unfoldITE (reBuildCmp(term, mknary<PLUS>(newArgs), rhs));
-          
+
           Expr transformed = mk<OR>(mk<AND>(iteCond,e1),
                                     mk<AND>(mkNeg(iteCond),e2));
-          
+
           //            outs () << "    [4b] ---> " << *term << "\n";
           //            outs () << "    [4e] ---> " << *transformed << "\n\n";
-          
+
           return transformed;
         }
       }
@@ -2098,6 +2203,25 @@ namespace ufo
     }
   };
 
+  struct SelectStoreRewriterHelpRepairer
+  {
+    Expr ind;
+    ExprFactory& efac;
+    SelectStoreRewriterHelpRepairer (Expr _ind) :
+      ind(_ind), efac(ind->getFactory()) {};
+
+    Expr operator() (Expr exp)
+    {
+      if (isOpX<EQ>(exp) && isOpX<SELECT>(exp->right()))
+      {
+        Expr cmp = simplifyCmp(mk<EQ>(ind, exp->right()->right()));
+        return simplifyIte(mk<ITE>(cmp,
+          mk<TRUE>(efac), exp));
+      }
+      return exp;
+    }
+  };
+
   inline static Expr rewriteSelectStore(Expr exp);
 
   struct SelectStoreRewriter
@@ -2114,19 +2238,28 @@ namespace ufo
           return mk<ITE>(mk<EQ>(exp->right(), exp->left()->right()),
              exp->left()->last(), mk<SELECT>(exp->left()->left(), exp->right()));
       }
-      if (isOpX<EQ>(exp) && isOpX<STORE>(exp->right()))
+
+      // to avoid this, try unfoldITE first
+      if (containsOp<ITE>(exp)) return exp;
+
+      Expr sel, val;
+      if (isOpX<EQ>(exp))
       {
-        ExprSet tmp;
-        tmp.insert(rewriteSelectStore(mk<EQ>(exp->left(), exp->right()->left())));
-        tmp.insert(mk<EQ>(exp->right()->last(), mk<SELECT>(exp->left(), exp->right()->right())));
-        return conjoin (tmp, exp->getFactory());
+        if (isOpX<STORE>(exp->right())) { sel = exp->right(); val = exp->left(); }
+        if (isOpX<STORE>(exp->left()))  { sel = exp->left(); val = exp->right(); }
       }
-      if (isOpX<EQ>(exp) && isOpX<STORE>(exp->left()))
+
+      if (sel != NULL)
       {
-        ExprSet tmp;
-        tmp.insert(rewriteSelectStore(mk<EQ>(exp->right(), exp->left()->left())));
-        tmp.insert(mk<EQ>(exp->left()->last(), mk<SELECT>(exp->right(), exp->left()->right())));
-        return conjoin (tmp, exp->getFactory());
+        Expr main = mk<EQ>(sel->last(), mk<SELECT>(val, sel->right()));
+        if (containsOp<STORE>(sel->left()))
+        {
+          Expr nested = rewriteSelectStore(mk<EQ>(val, sel->left()));
+          RW<SelectStoreRewriterHelpRepairer>
+              a(new SelectStoreRewriterHelpRepairer(sel->right()));
+          return mk<AND>(dagVisit (a, nested), main);
+        }
+        return main;
       }
       return exp;
     }
@@ -2201,6 +2334,8 @@ namespace ufo
     for (auto & var : quantified)
     {
       ExprSet eqs;
+      Expr store; // todo: extend to ExprSet
+
       for (unsigned it = 0; it < cnjs.size(); )
       {
         Expr cnj = cnjs[it];
@@ -2239,11 +2374,36 @@ namespace ufo
           }
         }
 
+        if (store == NULL && containsOp<STORE>(normalized) && isOpX<EQ>(normalized) &&
+            emptyIntersect(normalized->left(), quantified) &&
+            isOpX<STORE>(normalized->right()) && var == normalized->right()->left()) {
+          // one level of storing (to be extended)
+          store = normalized;
+        }
+
 //        errs() << "WARNING: COULD NOT NORMALIZE w.r.t. " << *var << ": "
 //               << *normalized << "     [[  " << *cnj << "  ]]\n";
 
         cnjs[it] = normalized;
         it++;
+      }
+
+      if (store != NULL) {
+        // assume "store" = (A = store(var, x, y))
+        for (unsigned it = 0; it < cnjs.size(); it++) {
+          ExprVector se;
+          filter (cnjs[it], IsSelect (), inserter(se, se.begin()));
+          for (auto s : se) {
+            if (contains(store, s)) continue;
+            if (s->left() == var) {
+              Expr cmp = simplifyCmp(mk<EQ>(store->right()->right(), s->right()));
+              cnjs[it] = replaceAll(cnjs[it], s, simplifyIte(
+                         mk<ITE>(cmp,
+                                 store->right()->last(),
+                                 mk<SELECT>(store->left(), s->right()))));
+            }
+          }
+        }
       }
 
       if (eqs.empty()) continue;
@@ -2309,7 +2469,7 @@ namespace ufo
   inline static Expr rewriteSelectStore(Expr exp)
   {
     RW<SelectStoreRewriter> a(new SelectStoreRewriter());
-    return dagVisit (a, exp);
+    return dagVisit (a, unfoldITE(simplifyArr(exp)));
   }
 
   // very simple check if tautology (SMT-based check is expensive)
@@ -2431,7 +2591,11 @@ namespace ufo
       lin_coms.insert(tmp->arg(0));
     }
 
-    if (lin_coms.size() == 0) return conjoin(cnjs, efac);
+    if (lin_coms.size() == 0)
+    {
+      if (!keep_redundand) ineqMerger(cnjs, true);
+      return conjoin(cnjs, efac);
+    }
 
     for (auto &lin_com : lin_coms) {
 
@@ -2637,6 +2801,7 @@ namespace ufo
       }
     }
 
+    if (!keep_redundand) ineqMerger(newCnjs, true);
     return conjoin(newCnjs, efac);
   }
 
@@ -3447,7 +3612,7 @@ namespace ufo
           {
             if (a->left() == b->right()) tr.insert(mk<T>(b->left(), a->right()));
             if (b->left() == a->right()) tr.insert(mk<T>(a->left(), b->right()));
-            
+
             if (isSymmetric(a))
             {
               if (a->left()  == b->left())  tr.insert(mk<T>(a->right(), b->right()));
@@ -3692,20 +3857,20 @@ namespace ufo
         else if (isOpX<GT>(c))
         {
           if (isOpX<MPZ>(c->left()))
-            ineqs.insert(mk<LEQ>(c->right(), mkTerm (mpz_class (string (lexical_cast<cpp_int>(c->left())-1)), exp->getFactory())));
+            ineqs.insert(mk<LEQ>(c->right(), mkMPZ (lexical_cast<cpp_int>(c->left())-1, exp->getFactory())));
           else if(isOpX<MPZ>(c->right()))
-            ineqs.insert(mk<LEQ>(mkTerm (mpz_class (string (lexical_cast<cpp_int>(c->right())+1)), exp->getFactory()), c->left()));
+            ineqs.insert(mk<LEQ>(mkMPZ (lexical_cast<cpp_int>(c->right())+1, exp->getFactory()), c->left()));
           else
-            ineqs.insert(mk<LEQ>(c->right(), mk<MINUS>(c->left(), mkTerm (mpz_class (1), exp->getFactory()))));
+            ineqs.insert(mk<LEQ>(c->right(), mk<MINUS>(c->left(), mkMPZ (1, exp->getFactory()))));
         }
         else if (isOpX<LT>(c))
         {
           if (isOpX<MPZ>(c->left()))
-            ineqs.insert(mk<LEQ>(mkTerm (mpz_class (string (lexical_cast<cpp_int>(c->left())+1)), exp->getFactory()), c->right()));
+            ineqs.insert(mk<LEQ>(mkMPZ (lexical_cast<cpp_int>(c->left())+1, exp->getFactory()), c->right()));
           else if(isOpX<MPZ>(c->right()))
-            ineqs.insert(mk<LEQ>(c->left(), mkTerm (mpz_class (string (lexical_cast<cpp_int>(c->right())-1)), exp->getFactory())));
+            ineqs.insert(mk<LEQ>(c->left(), mkMPZ (lexical_cast<cpp_int>(c->right())-1, exp->getFactory())));
           else
-            ineqs.insert(mk<LEQ>(c->left(), mk<MINUS>(c->right(), mkTerm (mpz_class (1), exp->getFactory()))));
+            ineqs.insert(mk<LEQ>(c->left(), mk<MINUS>(c->right(), mkMPZ (1, exp->getFactory()))));
         }
         else
         {
@@ -3871,3 +4036,4 @@ namespace ufo
 }
 
 #endif
+
