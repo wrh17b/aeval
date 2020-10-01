@@ -122,6 +122,7 @@ namespace ufo
       smt.assertExpr (s);
 
       if (!smt.solve ()) {
+        if (debug) outs () << "The S-part is unsatisfiable;\nFormula is trivially valid\n";
         return false;
       } else {
         ZSolver<EZ3>::Model m = smt.getModel();
@@ -1183,6 +1184,9 @@ namespace ufo
 
     Expr getSkolemFunction (bool compact = false)
     {
+      if (partitioning_size == 0)
+        return mk<TRUE>(efac);
+
       ExprSet skolUncond;
       ExprSet eligibleVars;
       skolemConstraints.clear(); // GF: just in case
