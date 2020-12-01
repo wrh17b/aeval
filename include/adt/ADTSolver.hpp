@@ -175,8 +175,9 @@ namespace ufo
 
         ExprVector result;
         if (useAssumption(assm, a, result, true)) {
-
           for (auto & it : result) {
+            if (it == NULL) continue;
+
             Expr tmp = it;
             if (!u.isTrue(tmp))
               {
@@ -835,7 +836,7 @@ namespace ufo
         Expr a = assumptions[i];
         ExprVector result;
         if (useAssumption(subgoal, a, result)) {
-          if (verbose) outs () << string(sp, ' ') << "found " << result.size() << " substitution(s) for assumption " << i << "\n";
+//          if (verbose) outs () << string(sp, ' ') << "found " << result.size() << " substitution(s) for assumption " << i << "\n";
           for (auto & it : result) {
             if (u.isTrue(it))
             {
@@ -920,7 +921,7 @@ namespace ufo
     bool tryRewriting(map<int, ExprVector>& allAttempts, Expr subgoal)
     {
       for (auto & a : allAttempts) {
-        outs() << string(sp, ' ') << allAttempts.size() << "\n";
+//        outs() << string(sp, ' ') << allAttempts.size() << "\n";
         int i = a.first;
         for (auto & exp : a.second) {
           if (verbose) outs() << string(sp, ' ') << "rewritten [" << i << "]: " << *exp << "\n";
