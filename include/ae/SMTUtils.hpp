@@ -324,6 +324,11 @@ namespace ufo
         return "Real";
       else if (bind::isBoolConst(var))
         return "Bool";
+      else if (bind::isAdtConst(var))
+      {
+        string str = lexical_cast<string>(var->last()->last());
+        return str.substr(1, str.length()-2);
+      }
       else if (bind::isConst<ARRAY_TY> (var))
       {
         Expr name = mkTerm<string> ("", var->getFactory());
