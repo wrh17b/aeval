@@ -223,6 +223,7 @@ namespace ufo
       m_fp.reset (new ZFixedPoint<EZ3> (m_z3));
       ZFixedPoint<EZ3> &fp = *m_fp;
       fp.loadFPfromFile(smt);
+      SMTUtils u(m_efac);
 
       for (auto &r: fp.m_rules)
       {
@@ -316,8 +317,8 @@ namespace ufo
         }
         hr.assignVarsAndRewrite (origSrcSymbs, tmp,
                                  origDstSymbs, invVars[hr.dstRelation]);
-
-        hr.body = simpleQE(hr.body, hr.locVars);
+        hr.body = u.removeITE(unfoldITE(hr.body));
+        hr.body = eliminateQuantifiers(hr.body, hr.locVars, true);
 
         // GF: ideally, hr.locVars should be empty after QE,
         // but the QE procedure is imperfect, so
@@ -328,6 +329,15 @@ namespace ufo
           if (find(body_vars.begin(), body_vars.end(), *it) == body_vars.end())
             it = hr.locVars.erase(it);
           else ++it;
+        }
+
+        if (!hr.locVars.empty() && hr.isQuery)
+        {
+          ExprVector args;
+          for (auto & a : hr.locVars) args.push_back(a->left());
+          args.push_back(hr.body);
+          Expr tmp = hr.body;
+          hr.body = mknary<EXISTS>(args);
         }
       }
 

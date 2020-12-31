@@ -67,10 +67,16 @@ namespace ufo
       if (reset) smt.reset();
       for (auto & c : cnjs)
       {
-        filter (c, bind::IsConst (), inserter (allVars, allVars.begin()));
+        ExprSet locVars;
+        filter (c, bind::IsConst (), inserter (locVars, locVars.begin()));
+        map<Expr, ExprVector> qVars;
+        getQVars (c, qVars);
+        for (auto & q : qVars) minusSets(locVars, q.second);
+        allVars.insert(locVars.begin(), locVars.end());
         smt.assertExpr(c);
       }
       boost::tribool res = smt.solve ();
+      if (boost::logic::indeterminate(res)) errs() << "WARNING: query indeterminate\n";
       return res;
     }
 
@@ -207,6 +213,27 @@ namespace ufo
       return ex;
     }
 
+    Expr removeITE(Expr ex)
+    {
+      ExprVector ites;
+      getITEs(ex, ites);
+      int sz = ites.size();
+      for (auto it = ites.begin(); it != ites.end();)
+      {
+        Expr tmp;
+        if (implies(ex, (*it)->left()))
+          tmp = (*it)->right();
+        else if (implies(ex, mk<NEG>((*it)->left())))
+          tmp = (*it)->last();
+        else {++it; continue; }
+
+        ex = replaceAll(ex, *it, tmp);
+        it = ites.erase(it);
+      }
+      if (sz == ites.size()) return ex;
+      else return simplifyBool(simplifyArithm(removeITE(ex)));
+    }
+
     /**
      * Remove some redundant conjuncts from the set of formulas
      */
@@ -215,8 +242,9 @@ namespace ufo
       if (conjs.size() < 2) return;
       ExprSet newCnjs = conjs;
 
-      for (auto & cnj : conjs)
+      for (auto rit = conjs.rbegin(); rit != conjs.rend(); ++rit)
       {
+        Expr cnj = *rit;
         if (isTrue (cnj))
         {
           newCnjs.erase(cnj);
@@ -229,14 +257,12 @@ namespace ufo
         Expr newConj = conjoin(newCnjsTry, efac);
         if (implies (newConj, cnj))
           newCnjs.erase(cnj);
-
         else {
           // workaround for arrays or complicated expressions
           Expr new_name = mkTerm<string> ("subst", cnj->getFactory());
           Expr new_conj = bind::boolConst(new_name);
           Expr tmp = replaceAll(newConj, cnj, new_conj);
           if (implies (tmp, new_conj)) {
-            errs() << "erased\n";
             newCnjs.erase(cnj);
           }
         }
@@ -401,6 +427,14 @@ namespace ufo
         print(e->right());
         outs () << " ";
         print(e->last());
+        outs () << ")";
+      }
+      else if (isOpX<PLUS>(e))
+      {
+        outs () << "(+ ";
+        print(e->left());
+        outs () << " ";
+        print(e->right());
         outs () << ")";
       }
       else outs () << z3.toSmtLib (e);

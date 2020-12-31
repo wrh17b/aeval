@@ -709,18 +709,19 @@ namespace ufo
   /**
    * Simple wrapper
    */
-  Expr eliminateQuantifiers(Expr cond, ExprSet& vars)
+  template<typename Range> static Expr eliminateQuantifiers(Expr cond, Range& vars, bool strict = false)
   {
     ExprFactory &efac = cond->getFactory();
     SMTUtils u(efac);
     if (vars.size() == 0) return simplifyBool(cond);
-
     Expr newCond = simplifyArithm(simpleQE(cond, vars));
 
     if (!emptyIntersect(newCond, vars) &&
         !containsOp<FORALL>(cond) && !containsOp<EXISTS>(cond) && !isNonlinear(newCond))
     {
-      AeValSolver ae(mk<TRUE>(efac), newCond, vars); // exists quantified . formula
+      ExprSet v;
+      v.insert(vars.begin(), vars.end());
+      AeValSolver ae(mk<TRUE>(efac), newCond, v); // exists quantified . formula
       if (ae.solve()) {
         newCond = ae.getValidSubset();
       } else {
@@ -731,6 +732,8 @@ namespace ufo
     ExprSet cnj;
     getConj(newCond, cnj);
     ineqMerger(cnj, true);
+
+    if (strict) return (conjoin(cnj, efac));
 
     for (auto it = cnj.begin(); it != cnj.end(); )
     {
@@ -750,7 +753,14 @@ namespace ufo
     return (conjoin(cnj, efac));
   };
 
-  Expr abduce (Expr goal, Expr assm)
+  static Expr eliminateQuantifiers(Expr cond, Expr var, bool strict = false)
+  {
+    ExprSet vars;
+    vars.insert(var);
+    return eliminateQuantifiers(cond, vars, strict);
+  }
+
+  static Expr abduce (Expr goal, Expr assm)
   {
     ExprFactory &efac = goal->getFactory();
     SMTUtils u(efac);
@@ -769,12 +779,17 @@ namespace ufo
     Expr goalTmp = replaceAll(goal, repls);
     Expr assmTmp = replaceAll(assm, repls);
 
-    ExprSet vars;
-    filter (assmTmp, bind::IsConst (), inserter(vars, vars.begin()));
-    Expr tmp = mkNeg(eliminateQuantifiers(mkNeg(mk<IMPL>(assmTmp, goalTmp)), vars));
+    ExprSet varsGoal;
+    filter (goalTmp, bind::IsConst (), inserter(varsGoal, varsGoal.begin()));
+
+    Expr tmp = mkNeg(eliminateQuantifiers(mkNeg(mk<IMPL>(assmTmp, goalTmp)), varsGoal));
     tmp = replaceAll(tmp, replsRev);
 
-    if (isOpX<FALSE>(tmp)) return NULL; // abduction unsuccessful
+    if (u.isFalse(mk<AND>(tmp, assm)))
+    {
+      outs () << "abduction unsuccessful\n";
+      return NULL; // abduction unsuccessful
+    }
 
     // sanity check:
     if (!u.implies(mk<AND>(tmp, assm), goal))
