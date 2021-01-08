@@ -1281,6 +1281,10 @@ namespace ufo
         {
           return exp->left()->last();
         }
+        if (isOpX<CONST_ARRAY>(exp->left()))
+        {
+          return exp->left()->last();
+        }
 //        if (isOpX<STORE>(exp->left()) && // exp->right() != exp->left()->right() &&
 //            bind::typeOf(exp->left())->last() == mk<BOOL_TY> (exp->efac ()))
 //        {
@@ -1546,6 +1550,34 @@ namespace ufo
 
         indepCnj.insert(simplifyExists(replaceAll(exp, exp->last(), conjoin(depCnj, efac))));
         return conjoin (indepCnj, efac);
+      }
+      if (isOpX<OR>(exp))
+      {
+        ExprSet all, exs;
+        ExprVector args;
+        getDisj(exp, all);
+        for (auto it = all.begin(); it != all.end();)
+        {
+          if (isOpX<EXISTS>(*it))
+          {
+            if (args.size() == 0)
+              for (int i = 0; i < (*it)->arity() - 1; i++)
+                args.push_back((*it)->arg(i));
+            else
+              for (int i = 0; i < (*it)->arity() - 1; i++)
+                if ((*it)->arg(i) != args[i])
+                  return exp;  // TODO: extend
+            exs.insert((*it)->last());
+            it = all.erase(it);
+          }
+          else ++it;
+        }
+        if (!exs.empty())
+        {
+          args.push_back(disjoin(exs, efac));
+          all.insert(mknary<EXISTS>(args));
+          return disjoin(all, efac);
+        }
       }
       return exp;
     }
@@ -4455,6 +4487,30 @@ namespace ufo
     for (auto & it : tmp) cnj.erase(it);
     cnj.insert(newCnjs.begin(), newCnjs.end());
     if (toRepeat) simplifyPropagate(cnj);
+  }
+
+  inline static Expr moveInsideQuantifiers (Expr e)
+  {
+    ExprSet tmpCnj, tmpQFree, tmpQ, newTmpQ;
+
+    getConj(e, tmpCnj);
+    for (auto it = tmpCnj.begin(); it != tmpCnj.end(); it = tmpCnj.erase(it))
+    {
+      if (isOpX<FORALL>(*it) || isOpX<EXISTS>(*it))
+        tmpQ.insert(*it);
+      else
+        tmpQFree.insert(*it);
+    }
+
+    if (tmpQ.empty()) return e;
+
+    for (auto it = tmpQ.begin(); it != tmpQ.end(); it = tmpQ.erase(it))
+    {
+      ExprSet newLast = tmpQFree;
+      getConj((*it)->last(), newLast);
+      tmpCnj.insert(replaceAll((*it), (*it)->last(), conjoin(newLast, e->getFactory())));
+    }
+    return conjoin(tmpCnj, e->getFactory());
   }
 
   void getLiterals (Expr exp, ExprSet& lits);

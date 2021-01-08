@@ -338,6 +338,7 @@ namespace ufo
           args.push_back(hr.body);
           Expr tmp = hr.body;
           hr.body = mknary<EXISTS>(args);
+          hr.body = simplifyExists(hr.body);
         }
       }
 

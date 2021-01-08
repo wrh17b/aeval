@@ -323,6 +323,68 @@ namespace ufo
       }
     }
 
+    Expr extendQuantified(Expr exp)
+    {
+      ExprSet cnj;
+      getConj(exp, cnj);
+      ExprSet exists;
+      ExprSet forall;
+      for (auto it = cnj.begin(); it != cnj.end();)
+      {
+        if (isOpX<EXISTS>(*it))
+        {
+          exists.insert(*it);
+          it = cnj.erase(it);
+        }
+        else if (isOpX<FORALL>(*it))
+        {
+          forall.insert(*it);
+          it = cnj.erase(it);
+        }
+        else ++it;
+      }
+      if (exists.empty()) return exp;
+
+      for (auto e : exists)
+      {
+        Expr eTmp = e;
+        ExprVector qVars;
+        for (int i = 0; i < e->arity() - 1; i++)
+          qVars.push_back(fapp(e->arg(i)));
+
+        for (auto & f : forall)
+        {
+          ExprVector fVars;
+          for (int i = 0; i < f->arity() - 1; i++)
+          {
+            Expr v = fapp(f->arg(i));
+            if (typeOf(v) == typeOf(qVars[i]))
+              fVars.push_back(v);
+            else
+              break;
+          }
+          if (fVars.size() != qVars.size())
+            continue;
+          ExprSet fCnj;
+          getConj(replaceAll(f->last(), fVars, qVars), fCnj);
+          for (auto & c : fCnj)
+          {
+            ExprSet fDsj;
+            getDisj(c, fDsj);
+            for (auto it = fDsj.begin(); it != fDsj.end(); )
+            {
+              if (isSat(*it, (Expr)e->last())) ++it;
+              else it = fDsj.erase(it);
+            }
+            e = replaceAll(e, e->last(),
+                  mk<AND>(e->last(), disjoin(fDsj, efac)));
+          }
+        }
+        exp = replaceAll(exp, eTmp, e);
+      }
+      return exp;
+    }
+
     /**
      * Model-based simplification of a formula with 1 (one only) variable
      */

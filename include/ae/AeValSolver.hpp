@@ -760,6 +760,30 @@ namespace ufo
     return eliminateQuantifiers(cond, vars, strict);
   }
 
+  template<typename Range> static Expr eliminateQuantifiersRepl(Expr cond, Range& vars, bool strict = false)
+  {
+    ExprFactory &efac = cond->getFactory();
+    SMTUtils u(efac);
+    ExprSet complex;
+    findComplexNumerics(cond, complex);
+    ExprMap repls;
+    ExprMap replsRev;
+    ExprSet varsCond; varsCond.insert(vars.begin(), vars.end());
+    for (auto & a : complex)
+    {
+      Expr repl = bind::intConst(mkTerm<string>
+            ("__repl_" + lexical_cast<string>(repls.size()), efac));
+      repls[a] = repl;
+      replsRev[repl] = a;
+      if (!emptyIntersect(a, vars)) varsCond.insert(repl);
+    }
+    Expr condTmp = replaceAll(cond, repls);
+
+    Expr tmp = eliminateQuantifiers(condTmp, varsCond, strict);
+    tmp = replaceAll(tmp, replsRev);
+    return tmp;
+  }
+
   static Expr abduce (Expr goal, Expr assm)
   {
     ExprFactory &efac = goal->getFactory();

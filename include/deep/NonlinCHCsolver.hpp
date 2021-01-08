@@ -112,18 +112,16 @@ namespace ufo
       if (!u.isSat(e)) return;
       if (!containsOp<FORALL>(e) && !containsOp<EXISTS>(e)) e = rewriteSelectStore(e);
 
-      ExprSet qVars;
-      getQuantifiedVars(e, qVars);
+      ExprSet qVars, varsToElim, complex;
+      ExprMap repls, replsRev;
+      map<Expr, ExprSet> replIngr;
 
-      ExprSet varsToElim;
+      getQuantifiedVars(e, qVars);
       filter (e, bind::IsConst (), inserter (varsToElim, varsToElim.begin()));
       minusSets(varsToElim, varsToKeep);
       minusSets(varsToElim, qVars);
-      ExprSet complex;
       findComplexNumerics(e, complex);
-      ExprMap repls;
-      ExprMap replsRev;
-      map<Expr, ExprSet> replIngr;
+
       for (auto & a : complex)
       {
         Expr repl = bind::intConst(mkTerm<string>
@@ -140,29 +138,20 @@ namespace ufo
       {
         eTmp = replaceAll (eTmp, replsRev);
         eTmp = simplifyQuants(eTmp);
-        ExprSet tmpCnj, newCnj, tmpDsj, tmpQFree, tmpQ;
-        Expr ex;
-        getConj(eTmp, tmpCnj);
-        ExprSet forQE, arrTmp;
-
+        eTmp = simplifyExists(eTmp);
+        eTmp = u.extendQuantified(eTmp);
+        eTmp = moveInsideQuantifiers(eTmp);
         map<Expr, ExprVector> qv;
         getQVars (eTmp, qv);
 
-        for (auto a : tmpCnj)
-          if (!containsOp<FORALL>(a) && !containsOp<EXISTS>(a))
-            tmpQFree.insert(a);
-          else
-            tmpQ.insert(a);
-
-        eTmp = conjoin(tmpQ, m_efac);
         for (auto tq : qv)
         {
           Expr q = tq.first;
-          ExprSet tmpQFreeTmp = tmpQFree;
-          getConj(q->last(), tmpQFreeTmp);
-          Expr ep = conjoin(tmpQFreeTmp, m_efac);
+          Expr ep = q->last();
           ep = simpleQE(ep, varsToElim);
           ep = rewriteSelectStore(ep);
+          ep = eliminateQuantifiersRepl(ep, varsToElim);
+          ep = u.removeRedundantDisjuncts(ep);
           ep = simplifyBool(simplifyArithm(ep));
           if (isOpX<FALSE>(ep) || isOpX<TRUE>(ep))
           {
@@ -182,8 +171,13 @@ namespace ufo
               epCnjs.insert(eliminateQuantifiers(conjoin(tmpm, m_efac), v));
           }
 
-          eTmp = replaceAll(eTmp, q->last(), conjoin(epCnjs, m_efac));
+          Expr toReplace = conjoin(epCnjs, m_efac);
+          if (emptyIntersect(toReplace, tq.second))
+            eTmp = replaceAll(eTmp, q, toReplace);
+          else
+            eTmp = replaceAll(eTmp, q->last(), toReplace);   // TODO: multiple things
         }
+        eTmp = moveInsideQuantifiers(eTmp);
       }
       else
       {
@@ -298,8 +292,6 @@ namespace ufo
 
     void propagateCandidatesBackward(HornRuleExt& hr, bool forceConv = false)
     {
-//      for (auto & hr : ruleManager.chcs)
-      {
         if (hr.isFact) return;
 
         Expr dstRel = hr.dstRelation;
@@ -385,6 +377,14 @@ namespace ufo
         }
         else
         {
+          decompose(hr, curCnd, occursNum, mixedCands);
+        }
+      }
+
+    void decompose(HornRuleExt& hr, ExprVector& curCnd, map<Expr, set<int>>& occursNum, ExprSet& mixedCands)
+    {
+          Expr dstRel = hr.dstRelation;
+          ExprVector& rels = hr.srcRelations;
           // decomposition here
 
           // fairness heuristic: prioritize candidates for all relations, which are true
@@ -414,7 +414,6 @@ namespace ufo
           // TODO: remove the loop (or find use of it)
           for (auto it = mixedCands.begin(); it != mixedCands.end(); )
           {
-            if (containsOp<ARRAY_TY>(*it)) { ++it; continue; }
             Expr a = *it;
             ExprSet processed;
             ExprSet allGuesses = allGuessesInit;
@@ -432,7 +431,7 @@ namespace ufo
               if (!u.isSat(a, conjoin(curCnd, m_efac))) return;  // need to recheck because the solver has been reset
               if (processed.find(r) != processed.end()) continue;
 
-              invVars.clear();
+              ExprVector invVars;
               ExprSet backGuesses, allVarsExcept;
               ExprVector vars;
               for (int j = 0; j < rels.size(); j++)
@@ -445,7 +444,12 @@ namespace ufo
                   if (occursNum[r].size() == 1) invVars = ruleManager.invVars[rels[j]];
                 }
                 else
-                  allVarsExcept.insert(hr.srcVars[j].begin(), hr.srcVars[j].end());
+                {
+                  for (auto & v : hr.srcVars[j])
+                  if ((containsOp<ARRAY_TY>(a) && containsOp<ARRAY_TY>(v)) ||
+                      !containsOp<ARRAY_TY>(a))
+                  allVarsExcept.insert(v);
+                }
               }
 
               // model-based cartesian decomposition
@@ -601,13 +605,13 @@ namespace ufo
 //            outs () << "sanity check: " << u.implies(conjoin(allGuesses, m_efac), a) << "\n";
           }
         }
-      }
-    }
 
-    void propagateRangeBackward(HornRuleExt& hr, ExprVector& invVars, ExprVector& srcVars)
+    void propagateRangeBackward(HornRuleExt& hr, ExprVector& invVars, ExprVector& srcVars, int i = 0)
     {
-      Expr& dstRel = hr.dstRelation;
-      Expr e = conjoin(candidates[dstRel], m_efac);
+      Expr& srcRel = hr.srcRelations[i];
+      ExprSet allCands;
+      for (auto & c : hr.srcRelations) allCands.insert(candidates[c].begin(), candidates[c].end());
+      Expr e = conjoin(allCands, m_efac);
       if (containsOp<FORALL>(e))
       {
         e = u.removeRedundantConjuncts(mk<AND>(e, hr.body));
@@ -625,7 +629,7 @@ namespace ufo
               if (isSkippable(model, hr.dstVars)) return;
 
               ExprSet newCands;
-              for (auto it = candidates[dstRel].begin(); it != candidates[dstRel].end(); ++it)
+              for (auto it = candidates[srcRel].begin(); it != candidates[srcRel].end(); ++it)
               {
                 Expr c = *it;
                 if (isOpX<FORALL>(c))
@@ -633,7 +637,7 @@ namespace ufo
                   ExprSet qVars, range, cellFla, newRange, allSatFla, models, all, newCnd;
                   getQuantifiedVars(c, qVars);
                   getDisj(c->last(), range);
-                  Expr repl = mkNeg(replaceAll(c, ruleManager.invVars[dstRel], hr.dstVars));
+                  Expr repl = mkNeg(replaceAll(c, ruleManager.invVars[srcRel], hr.dstVars));
                   allSatFla.insert(model);
                   allSatFla.insert(repl->last());
                   ExprMap matchVars;
@@ -661,7 +665,7 @@ namespace ufo
                   }
 
                   all.insert(replaceAll(hr.body, matchVars));
-                  all.insert(mkNeg(replaceAll(disjoin(cellFla, m_efac), ruleManager.invVars[dstRel], hr.dstVars)));
+                  all.insert(mkNeg(replaceAll(disjoin(cellFla, m_efac), ruleManager.invVars[srcRel], hr.dstVars)));
                   ExprVector srcVarsE = srcVars;
                   srcVarsE.insert(srcVarsE.end(), qVars.begin(), qVars.end());
                   ExprVector invVarsE = invVars;
@@ -672,7 +676,7 @@ namespace ufo
                   newCands.insert(newCand);
                 }
               }
-              candidates[dstRel].insert(newCands.begin(), newCands.end());
+              candidates[srcRel].insert(newCands.begin(), newCands.end());
               multiHoudini(worklist, false);  // to double-check
             }
           }
