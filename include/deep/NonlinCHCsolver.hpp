@@ -165,7 +165,7 @@ namespace ufo
           {
             ExprSet tmpm;
             for (auto & p : epCnjs)
-              if (contains(p, v))
+              if (contains(p, v) && !containsOp<ARRAY_TY>(p))
                 tmpm.insert(p);
             if (isNumeric(v))
               epCnjs.insert(eliminateQuantifiers(conjoin(tmpm, m_efac), v));
