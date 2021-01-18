@@ -1173,6 +1173,9 @@ namespace ufo
         if (isOpX<FALSE>(exp->right()))
           return mkNeg(exp->left());
 
+        if (isOpX<TRUE>(exp->left()))
+          return exp->right();
+
 //        return simplifyBool(mk<OR>(
 //                 mkNeg(exp->left()),
 //                 exp->right()));
@@ -1799,6 +1802,7 @@ namespace ufo
 
   inline static Expr cloneVar(Expr var, Expr new_name) // ... and give a new_name to the clone
   {
+//    return replaceAll(var, var->left()->left(), new_name);
     if (bind::isIntConst(var))
       return bind::intConst(new_name);
     else if (bind::isRealConst(var))
@@ -1807,8 +1811,8 @@ namespace ufo
       return bind::boolConst(new_name);
     else if (bind::isConst<ARRAY_TY> (var))
       return bind::mkConst(new_name, mk<ARRAY_TY> (
-             mk<INT_TY> (new_name->getFactory()),
-             mk<INT_TY> (new_name->getFactory()))); // GF: currently, only Arrays over Ints
+             var->left()->right()->left(),
+             var->left()->right()->right()));
     else if (bind::isAdtConst(var))
     {
       ExprVector type;
@@ -3931,8 +3935,22 @@ namespace ufo
 
   inline static Expr normalizeArithm (Expr exp)
   {
+    ExprSet complex;
+    findComplexNumerics(exp, complex);
+    ExprMap repls;
+    ExprMap replsRev;
+    for (auto & a : complex)
+    {
+      Expr repl = bind::intConst(mkTerm<string>
+        ("__repl_" + lexical_cast<string>(repls.size()), exp->getFactory()));
+      repls[a] = repl;
+      replsRev[repl] = a;
+    }
+    exp = replaceAll(exp, repls);
     RW<NormalizeArithmExpr> rw(new NormalizeArithmExpr(exp->getFactory()));
-    return dagVisit (rw, exp);
+    exp = dagVisit (rw, exp);
+    exp = replaceAll(exp, replsRev);
+    return exp;
   }
 
   Expr static normalizeImplHlp (Expr e, ExprSet& lhs)
@@ -3954,8 +3972,9 @@ namespace ufo
     return rhs;
   }
 
-  Expr static createQuantifiedFormulaRestr(Expr def, ExprVector& vars, bool forall = true)
+  Expr static createQuantifiedFormulaRestr (Expr def, ExprVector& vars, bool forall = true)
   {
+    if (vars.empty()) return def;
     ExprVector args;
     for (auto & a : vars) args.push_back(a->last());
     args.push_back(def);
@@ -3963,7 +3982,7 @@ namespace ufo
     else return mknary<EXISTS>(args);
   }
 
-  Expr static createQuantifiedFormula(Expr def, ExprVector& toAvoid)
+  Expr static createQuantifiedFormula (Expr def, ExprVector& toAvoid)
   {
     ExprVector vars;
     filter(def, bind::IsConst (), inserter(vars, vars.begin()));
@@ -3972,6 +3991,8 @@ namespace ufo
         it = vars.erase(it);
       else
         ++it;
+    if (vars.size() == 0)
+      return def;
     return createQuantifiedFormulaRestr(def, vars);
   }
 
