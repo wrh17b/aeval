@@ -14,13 +14,12 @@
 (rule (inv a b 0 0 bl))
 
 (rule (=> (and (inv a b i al bl) (< i bl)
-	       (= (ite (>= (select b i) 0) (store a al (select b i)) a) a1)
-	       (= (ite (>= (select b i) 0) (+ al 1) al) al1)
+	       (= (ite (= (select b i) 0) a (store a al (select b i))) a1)
+	       (= (ite (= (select b i) 0) al (+ al 1)) al1)
 	       (= i1 (+ i 1))) (inv a1 b i1 al1 bl)))
 
 (rule (=> (and (inv a b i al bl) (>= i bl)
-	       (not (forall ((k Int))
-            (exists ((l Int)) (=> (and (<= 0 k) (<= 0 bl) (< k al)) (= (select a k) (select b l)))))))
+	       (not (forall ((k Int)) (exists ((l Int)) (=> (and (<= 0 k) (<= 0 bl) (< k al)) (= (select a k) (select b l)))))))
 	  fail))
 
 (query fail)

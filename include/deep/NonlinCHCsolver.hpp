@@ -139,6 +139,8 @@ namespace ufo
         eTmp = replaceAll (eTmp, replsRev);
         eTmp = simplifyQuants(eTmp);
         eTmp = simplifyExists(eTmp);
+        eTmp = u.removeRedundantConjuncts(eTmp);
+        eTmp = simplifyBool(eTmp);
         eTmp = u.extendQuantified(eTmp);
         eTmp = moveInsideQuantifiers(eTmp);
         map<Expr, ExprVector> qv;
@@ -167,6 +169,7 @@ namespace ufo
             for (auto & p : epCnjs)
               if (contains(p, v) && !containsOp<ARRAY_TY>(p))
                 tmpm.insert(p);
+
             if (isNumeric(v))
               epCnjs.insert(eliminateQuantifiers(conjoin(tmpm, m_efac), v));
           }
@@ -218,7 +221,7 @@ namespace ufo
       for (auto g : tmp)
       {
         g = replaceAll (g, replsRev);
-        g = simplifyBool(simplifyQuants(g));
+        g = simplifyBool(simplifyExists(simplifyQuants(g)));
         if (!varsToRename.empty())
           g = replaceAll(g, varsToKeep, varsToRename);
         guesses.insert(g);
@@ -297,9 +300,6 @@ namespace ufo
         Expr dstRel = hr.dstRelation;
         ExprVector& rels = hr.srcRelations;
 
-        ExprVector invVars;
-        ExprVector srcVars;
-
         // identifying nonlinear cases (i.e., when size(occursNum[...]) > 1)
         map<Expr, set<int>> occursNum;
         for (int i = 0; i < rels.size(); i++)
@@ -310,6 +310,7 @@ namespace ufo
               occursNum[rels[i]].insert(j);
         }
 
+        ExprVector invVars, srcVars;
         for (int i = 0; i < hr.srcVars.size(); i++)
           srcVars.insert(srcVars.end(), hr.srcVars[i].begin(), hr.srcVars[i].end());
 
@@ -811,7 +812,7 @@ namespace ufo
         assert (allVars.empty());
 //        if (!u.isSat(sol)) assert(0);
 
-        Expr res = simplifyBool(simplifyArithm(sol));
+        Expr res = (simplifyArithm(sol));
         if (simplify)
         {
           lms.clear();
@@ -923,6 +924,25 @@ namespace ufo
       return false;
     }
 
+    // GF: currently works only for linear (inductive) CHCs, to extend
+    Expr strengthenExists(Expr fla, Expr model)
+    {
+      ExprSet all;
+      getDisj(fla, all);
+      bool res = false;
+      for (auto it = all.begin(); it != all.end(); )
+      {
+        if (u.isSat(model, *it))
+        {
+          res = true;
+          it = all.erase(it);
+        }
+        else ++it;
+      }
+      if (res) return disjoin(all, fla->getFactory());
+      return NULL;
+    }
+
     Expr weakenForall(Expr fla, ExprVector& srcVars, ExprVector& dstVars, Expr model)
     {
       ExprSet qfree;
@@ -961,7 +981,12 @@ namespace ufo
           bool res2;
           Expr dstRel = hr->dstRelation;
 
+          ExprVector srcVars;
+          for (int i = 0; i < hr->srcVars.size(); i++)
+            srcVars.insert(srcVars.end(), hr->srcVars[i].begin(), hr->srcVars[i].end());
+
           Expr model = u.getModel(hr->dstVars);
+          Expr modelSrc = u.getModel(srcVars);
           if (isSkippable(model, hr->dstVars))//, candidatesTmp))
           {
             candidatesTmp[dstRel].clear();
@@ -979,6 +1004,8 @@ namespace ufo
                 res2 = false;
                 if (isOpX<FORALL>(repl))
                   newCand = weakenForall(*it, ruleManager.invVars[dstRel], hr->dstVars, model);
+                else if (containsOp<EXISTS>(repl) && hr->isInductive)
+                  newCand = strengthenExists(*it, modelSrc);
                 it = candidatesTmp[dstRel].erase(it);
               }
               else ++it;

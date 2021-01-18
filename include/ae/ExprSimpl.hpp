@@ -2735,248 +2735,6 @@ namespace ufo
     cnjs = newCnjs;
   }
 
-  inline static Expr simplifyArithmConjunctionsOLD(Expr fla, bool keep_redundand = false)
-  {
-    ExprFactory& efac = fla->getFactory();
-    ExprSet cnjs, newCnjs;
-    getConj(fla, cnjs);
-    if (cnjs.size() == 1) return *cnjs.begin();
-    ExprSet lin_coms;
-
-    // search for a var, const*var or whatever exists in any conjunct
-    for (auto & d : cnjs) {
-      if (!isOp<ComparissonOp>(d) ||
-          !isNumeric(d->arg(0))) {
-        newCnjs.insert(d);
-        continue;
-      }
-
-      Expr tmp = simplifyArithm(
-        reBuildCmp(d, mk<PLUS>(d->arg(0), additiveInverse(d->arg(1))),
-                   mkMPZ (0, efac)));
-      tmp = ineqReverter(tmp);
-
-      if (isOpX<TRUE>(tmp)) continue;
-      if (isOpX<FALSE>(tmp)) return tmp;
-
-      newCnjs.insert(tmp);
-      lin_coms.insert(tmp->arg(0));
-    }
-
-    if (lin_coms.size() == 0)
-    {
-      if (!keep_redundand) ineqMerger(cnjs, true);
-      return conjoin(cnjs, efac);
-    }
-
-    for (auto &lin_com : lin_coms) {
-
-      cpp_int cur_max_gt;
-      cpp_int cur_max_ge;
-      cpp_int cur_min_lt;
-      cpp_int cur_min_le;
-
-      bool cur_max_gt_bl = false;
-      bool cur_max_ge_bl = false;
-      bool cur_min_lt_bl = false;
-      bool cur_min_le_bl = false;
-
-      set<cpp_int> all_diseqs;
-
-      for (auto it = newCnjs.begin(); it != newCnjs.end(); ) {
-        auto d = *it;
-
-        if (!isOp<ComparissonOp>(d) ||
-            d->arg(0) != lin_com ||
-            !isOpX<MPZ>(d->arg(1))) {
-          ++it;
-          continue;
-        }
-
-        cpp_int c = lexical_cast<cpp_int>(d->arg(1));
-
-        if (isOpX<NEQ>(d))  {
-          all_diseqs.insert(c);
-        }
-        if (isOpX<LEQ>(d)) {
-          cur_min_le = cur_min_le_bl ? min(cur_min_le, c) : c;
-          cur_min_le_bl = true;
-        }
-        if (isOpX<GEQ>(d)) {
-          cur_max_ge = cur_max_ge_bl ? max(cur_max_ge, c) : c;
-          cur_max_ge_bl = true;
-        }
-        if (isOpX<LT>(d)) {
-          cur_min_lt = cur_min_lt_bl ? min(cur_min_lt, c) : c;
-          cur_min_lt_bl = true;
-        }
-        if (isOpX<GT>(d)) {
-          cur_max_gt = cur_max_gt_bl ? max(cur_max_gt, c) : c;
-          cur_max_gt_bl = true;
-        }
-        if (isOpX<EQ>(d)) {
-          cur_max_ge = cur_max_ge_bl ? max(cur_max_ge, c) : c;
-          cur_min_le = cur_min_le_bl ? min(cur_min_le, c) : c;
-          cur_max_ge_bl = true;
-          cur_min_le_bl = true;
-        }
-        if (keep_redundand) it++;
-        else newCnjs.erase (it++);
-      }
-
-      if (cur_min_le_bl)
-        while (true) {
-          auto tmp = cur_min_le;
-          for (auto it = all_diseqs.begin(); it != all_diseqs.end(); ) {
-            if (*it == cur_min_le) {
-              cur_min_le--;
-              if (keep_redundand)
-                newCnjs.insert(mk<LEQ>(lin_com, mkMPZ (cur_min_le, efac)));
-              it = all_diseqs.erase(it);
-            } else if (*it > cur_min_le) { // remove redundand, e.g., (x != 7 /\ x <= 5)
-              if (keep_redundand)
-                newCnjs.insert(mk<LEQ>(lin_com, mkMPZ (*it, efac)));
-              it = all_diseqs.erase(it);
-            }
-            else ++it;
-          }
-          if (tmp == cur_min_le) break;
-        }
-
-      if (cur_min_lt_bl)
-        while (true) {
-          auto tmp = cur_min_lt;
-          for (auto it = all_diseqs.begin(); it != all_diseqs.end(); ) {
-            if (*it == cur_min_lt - 1) {
-              cur_min_lt--;
-              if (keep_redundand)
-                newCnjs.insert(mk<LT>(lin_com, mkMPZ (cur_min_lt, efac)));
-              it = all_diseqs.erase(it);
-            } else if (*it >= cur_min_lt) {  // remove redundand, e.g., (x != 5 /\ x < 5)
-              if (keep_redundand)
-                newCnjs.insert(mk<LT>(lin_com, mkMPZ (*it, efac)));
-              it = all_diseqs.erase(it);
-            }
-            else ++it;
-          }
-          if (tmp == cur_min_lt) break;
-        }
-
-      if (cur_max_ge_bl)
-        while (true) {
-          auto tmp = cur_max_ge;
-          for (auto it = all_diseqs.begin(); it != all_diseqs.end(); ) {
-            if (*it == cur_max_ge) {
-              cur_max_ge++;
-              if (keep_redundand)
-                newCnjs.insert(mk<GEQ>(lin_com, mkMPZ (cur_max_ge, efac)));
-              it = all_diseqs.erase(it);
-            } else if (*it < cur_max_ge) { // remove redundand, e.g., (x != 4 /\ x >= 5)
-              if (keep_redundand)
-                newCnjs.insert(mk<GEQ>(lin_com, mkMPZ (*it, efac)));
-              it = all_diseqs.erase(it);
-            }
-            else ++it;
-          }
-          if (tmp == cur_max_ge) break;
-        }
-
-      if (cur_max_gt_bl)
-        while (true) {
-          auto tmp = cur_max_gt;
-          for (auto it = all_diseqs.begin(); it != all_diseqs.end(); ) {
-            if (*it == cur_max_gt + 1) {
-              cur_max_gt++;
-              if (keep_redundand)
-                newCnjs.insert(mk<GT>(lin_com, mkMPZ (cur_max_gt, efac)));
-              it = all_diseqs.erase(it);
-            } else if (*it <= cur_max_gt) { // remove redundand, e.g., (x != 5 /\ x > 5)
-              if (keep_redundand)
-                newCnjs.insert(mk<GT>(lin_com, mkMPZ (*it, efac)));
-              it = all_diseqs.erase(it);
-            }
-            else ++it;
-          }
-          if (tmp == cur_max_gt) break;
-        }
-
-      for (auto c : all_diseqs) {
-        newCnjs.insert (mk<NEQ>(lin_com, mkMPZ (c, efac)));
-      }
-
-      if ((cur_max_gt_bl && cur_min_lt_bl && cur_max_gt >= cur_min_lt - 1) || // e.g., (x > 3 /\ x < 4)
-          (cur_max_ge_bl && cur_min_lt_bl && cur_max_ge >= cur_min_lt) ||
-          (cur_max_gt_bl && cur_min_le_bl && cur_max_gt >= cur_min_le) ||
-          (cur_max_ge_bl && cur_min_le_bl && cur_max_ge >= cur_min_le + 1))
-        return mk<FALSE>(efac);
-
-      if (cur_max_ge_bl && cur_min_le_bl && cur_max_ge == cur_min_le && newCnjs.empty())
-      {
-        Expr res = mk<EQ>(lin_com, mkMPZ (cur_min_le, efac));
-        if (keep_redundand) newCnjs.insert(res);
-        else return res;
-      }
-
-      if (cur_max_gt_bl && cur_min_le_bl && cur_max_gt + 1 == cur_min_le && newCnjs.empty())
-      {
-        Expr res = mk<EQ>(lin_com, mkMPZ (cur_min_le, efac));
-        if (keep_redundand) newCnjs.insert(res);
-        else return res;
-      }
-
-      if (cur_max_ge_bl && cur_min_lt_bl && cur_max_ge + 1 == cur_min_lt && newCnjs.empty())
-      {
-        Expr res = mk<EQ>(lin_com, mkMPZ (cur_max_ge, efac));
-        if (keep_redundand) newCnjs.insert(res);
-        else return res;
-      }
-
-      if (cur_max_gt_bl && cur_min_lt_bl && cur_max_gt + 2 == cur_min_lt && newCnjs.empty())
-      {
-        Expr res = mk<EQ>(lin_com, mkMPZ (cur_max_gt + 1, efac));
-        if (keep_redundand) newCnjs.insert(res);
-        else return res;
-      }
-
-      if (cur_min_le_bl && cur_min_lt_bl) {
-        if (cur_min_le >= cur_min_lt) {
-          newCnjs.insert(mk<LT>(lin_com, mkMPZ (cur_min_lt, efac)));
-        }
-        else {
-          newCnjs.insert(mk<LEQ>(lin_com, mkMPZ (cur_min_le, efac)));
-        }
-      }
-      else {
-        if (cur_min_le_bl) {
-          newCnjs.insert(mk<LEQ>(lin_com, mkMPZ (cur_min_le, efac)));
-        }
-        if (cur_min_lt_bl) {
-          newCnjs.insert(mk<LT>(lin_com, mkMPZ (cur_min_lt, efac)));
-        }
-      }
-
-      if (cur_max_ge_bl && cur_max_gt_bl) {
-        if (cur_max_ge <= cur_max_gt) {    // e.g., x > 5 /\ x >= 5
-          newCnjs.insert(mk<GT>(lin_com, mkMPZ (cur_max_gt, efac)));
-        }
-        else {
-          newCnjs.insert(mk<GEQ>(lin_com, mkMPZ (cur_max_ge, efac)));
-        }
-      }
-      else {
-        if (cur_max_ge_bl) {
-          newCnjs.insert(mk<GEQ>(lin_com, mkMPZ (cur_max_ge, efac)));
-        }
-        if (cur_max_gt_bl) {
-          newCnjs.insert(mk<GT>(lin_com, mkMPZ (cur_max_gt, efac)));
-        }
-      }
-    }
-
-    if (!keep_redundand) ineqMerger(newCnjs, true);
-    return conjoin(newCnjs, efac);
-  }
-
   // similar to simplifyArithmDisjunctions
   inline static Expr simplifyArithmConjunctions(Expr fla, bool keep_redundand = false)
   {
@@ -4491,26 +4249,38 @@ namespace ufo
 
   inline static Expr moveInsideQuantifiers (Expr e)
   {
-    ExprSet tmpCnj, tmpQFree, tmpQ, newTmpQ;
-
-    getConj(e, tmpCnj);
-    for (auto it = tmpCnj.begin(); it != tmpCnj.end(); it = tmpCnj.erase(it))
+    if (isOpX<OR>(e))
     {
-      if (isOpX<FORALL>(*it) || isOpX<EXISTS>(*it))
-        tmpQ.insert(*it);
-      else
-        tmpQFree.insert(*it);
+      ExprSet dsjs, newDsjs;
+      getDisj(e, dsjs);
+      for (auto & d : dsjs) newDsjs.insert(moveInsideQuantifiers(d));
+      return disjoin(newDsjs, e->getFactory());
     }
-
-    if (tmpQ.empty()) return e;
-
-    for (auto it = tmpQ.begin(); it != tmpQ.end(); it = tmpQ.erase(it))
+    else
     {
-      ExprSet newLast = tmpQFree;
-      getConj((*it)->last(), newLast);
-      tmpCnj.insert(replaceAll((*it), (*it)->last(), conjoin(newLast, e->getFactory())));
+      ExprSet tmpCnj, tmpQFree, tmpQ, newTmpQ;
+
+      getConj(e, tmpCnj);
+      for (auto it = tmpCnj.begin(); it != tmpCnj.end(); it = tmpCnj.erase(it))
+      {
+        if (isOpX<FORALL>(*it) || isOpX<EXISTS>(*it))
+          tmpQ.insert(*it);
+        else
+          tmpQFree.insert(*it);
+      }
+
+      if (tmpQ.empty()) return e;
+
+      for (auto it = tmpQ.begin(); it != tmpQ.end(); it = tmpQ.erase(it))
+      {
+        ExprSet newLast = tmpQFree;
+        getConj((*it)->last(), newLast);
+        tmpCnj.insert(
+                replaceAll((*it), (*it)->last(),
+                           moveInsideQuantifiers(conjoin(newLast, e->getFactory()))));
+      }
+      return conjoin(tmpCnj, e->getFactory());
     }
-    return conjoin(tmpCnj, e->getFactory());
   }
 
   void getLiterals (Expr exp, ExprSet& lits);
