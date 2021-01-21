@@ -3,6 +3,7 @@
 
 #include "deep/HornNonlin.hpp"
 #include "ADTSolver.hpp"
+#include "SimSynt.hpp"
 #include <algorithm>
 
 using namespace std;
@@ -16,14 +17,14 @@ namespace ufo
 
     std::map<Expr,size_t> values_inds;
     ExprVector &constructors;
-    ExprVector assumptions;
+    ExprVector &assumptions;
 
     ExprSet &decls;
     vector<HornRuleExt> &chcs;
 
   public:
-    CHCSolver(ExprVector& _constructors, ExprSet& _adts, ExprFactory &_efac, ExprSet &_decls, vector<HornRuleExt> &_chcs) :
-      constructors(_constructors), adts(_adts), efac(_efac), decls(_decls), chcs(_chcs) {}
+    CHCSolver(ExprVector& _constructors, ExprSet& _adts, ExprFactory &_efac, ExprSet &_decls, ExprVector &_assms, vector<HornRuleExt> &_chcs) :
+      constructors(_constructors), adts(_adts), efac(_efac), decls(_decls), assumptions(_assms), chcs(_chcs) {}
 
     Expr createNewApp(HornRuleExt chc, int i, int ind) {
       ExprVector types;
@@ -138,7 +139,8 @@ namespace ufo
       Expr destination = mk<EQ>(baseApp, chc.dstVars[ind]);
       return destination;
     }
-    void solve() {
+
+    bool solve() {
       // find the return value for uninterpreted symbols (keep it in values_inds map)
       for (auto & decl: decls) {
         for (auto & chc : chcs) {
@@ -268,7 +270,7 @@ namespace ufo
           outs() << "goal:\n" << *goal << "\n\n";
 
           ADTSolver sol (goal, current_assumptions, constructors);
-          sol.solve();
+          if (!sol.solve()) return false;
         }
         else {
           ExprVector cnj;
@@ -292,9 +294,90 @@ namespace ufo
           }
           outs() << "goal:\n" << *goal << "\n\n";
           ADTSolver adtSol (goal, current_assumptions, constructors);
-          adtSol.solveNoind();
+          if (!adtSol.solveNoind()) return false;
         }
       }
+      return true;
+    }
+
+    bool solveArr(){
+      Expr decl = NULL;
+      for (auto & d : decls){
+        if (containsOp<ARRAY_TY>(d)){
+          if (decl == NULL) decl = d;
+          else return false;
+        }
+      }
+      Expr base;
+      ExprVector opsAdt, opsArr;
+      set<int> visited;
+      ExprMap varVersions;
+
+      ExprSet adts;
+      for (auto & c : constructors) adts.insert(c->last());
+
+      while (visited.size() != chcs.size()){
+        for (int i = 0; i < chcs.size(); i++){
+          if (find(visited.begin(), visited.end(), i) != visited.end()) continue;
+          auto &hr = chcs[i];
+
+          if (hr.isInductive && varVersions.empty())
+            for (int j = 0; j < hr.srcVars[0].size(); j++)
+              varVersions[hr.srcVars[0][j]] = hr.dstVars[j];
+
+          if (hr.isFact && varVersions.empty()) continue;
+
+          ExprSet tmp, tmpAdt, tmpArr;
+          getConj(hr.body, tmp);
+          for (auto & a : tmp){
+            bool adt = false;
+            for (auto & c : adts)
+              if (contains(a, c)) {
+                tmpAdt.insert(a);
+                adt = true;
+                break;
+              }
+            if (!adt) tmpArr.insert(a);
+          }
+          assert (!tmpAdt.empty());
+
+          if (hr.isFact && !varVersions.empty()){
+            base = replaceAllRev(conjoin(tmpArr, efac), varVersions);
+          } else {
+            opsAdt.push_back(conjoin(tmpAdt, efac));
+            opsArr.push_back(conjoin(tmpArr, efac));
+          }
+          visited.insert(i);
+        }
+      }
+
+      // getting a candidate
+      SimSynt sim (efac, opsAdt, opsArr, varVersions, constructors, decl, assumptions, base);
+      sim.proc();
+
+      // proving
+      for (int i = 0; i < chcs.size(); i++){
+        auto &hr = chcs[i];
+        if (!checkCHC(chcs[i])) return false;
+      }
+      sim.printSol();
+      return true;
+    }
+
+    bool checkCHC(HornRuleExt& hr, bool print = false){
+      ExprVector assms = assumptions;
+      Expr goal = hr.isQuery ? mk<FALSE>(efac) : bind::fapp (hr.dstRelation, hr.dstVars);
+      for (int i = 0; i < hr.srcRelations.size(); i++){
+        assms.push_back(bind::fapp (hr.srcRelations[i], hr.srcVars[i]));
+      }
+      assms.push_back(hr.body);
+      return prove (assms, goal, 2, print);
+    }
+
+    bool prove (ExprVector& lemmas, Expr fla, int rounds = 2, bool print = false)
+    {
+      ADTSolver sol (fla, lemmas, constructors, 5, 2, 3, 1, print); // last false is for verbosity
+      return isOpX<FORALL>(fla) ? sol.solve() : sol.solveNoind(rounds);
     }
   };
 
@@ -305,21 +388,21 @@ namespace ufo
     CHCs ruleManager(efac, z3);
     ExprSet adts;
     ruleManager.parse(smt_file);
-    ruleManager.print();
+//    ruleManager.print();
 
-    std::map<Expr,size_t> values_inds;
     ExprVector constructors;
     ExprVector assumptions;
 
-    ExprSet decls = ruleManager.decls;
+    ExprSet& decls = ruleManager.decls;
 
     for (auto & a : z3.getAdtConstructors()) {
       constructors.push_back(regularizeQF(a));
       adts.insert(a->last());
     }
 
-    CHCSolver sol (constructors, adts, efac, decls, ruleManager.chcs);
-    sol.solve();
+    CHCSolver sol (constructors, adts, efac, decls, ruleManager.extras, ruleManager.chcs);
+    bool res = containsOp<ARRAY_TY>(conjoin(decls, efac)) ? sol.solveArr() : sol.solve();
+    outs () << (res ? "unsat\n" : "unknown\n");
   }
 }
 
