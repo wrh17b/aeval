@@ -37,11 +37,12 @@ namespace ufo
     bool useZ3 = false;
     unsigned to;
     ExprVector blockedAssms;
+    int nestedLevel;
 
     public:
 
-    ADTSolver(Expr _goal, ExprVector& _assumptions, ExprVector& _constructors, int _maxDepth = 5, int _maxGrow = 3, int _mergingIts = 3, int _earlySplit = 1, bool _verbose = false, bool _useZ3 = true, unsigned _to = 1000) :
-        goal(_goal), assumptions(_assumptions), constructors(_constructors), efac(_goal->getFactory()), u(_goal->getFactory(), _to), maxDepth(_maxDepth), maxGrow(_maxGrow), mergingIts(_mergingIts), earlySplit(_earlySplit), verbose(_verbose), useZ3(_useZ3), to (_to)
+    ADTSolver(Expr _goal, ExprVector& _assumptions, ExprVector& _constructors, int _maxDepth = 5, int _maxGrow = 3, int _mergingIts = 3, int _earlySplit = 1, bool _verbose = false, bool _useZ3 = true, unsigned _to = 1000, unsigned _l = 0) :
+        goal(_goal), assumptions(_assumptions), constructors(_constructors), efac(_goal->getFactory()), u(_goal->getFactory(), _to), maxDepth(_maxDepth), maxGrow(_maxGrow), mergingIts(_mergingIts), earlySplit(_earlySplit), verbose(_verbose), useZ3(_useZ3), to (_to), nestedLevel(_l)
     {
       // for convenience, rename assumptions (to have unique quantified variables)
       renameAssumptions();
@@ -985,11 +986,11 @@ namespace ufo
             rewriteSequence.pop_back();
           }
 
-          if (subgoal != exp)
+          if (subgoal != exp && nestedLevel < maxGrow)
           {
             // nested induction
             auto assumptionsTmp = assumptions;
-            ADTSolver sol (exp, assumptionsTmp, constructors, maxDepth, maxGrow, mergingIts, earlySplit, false, useZ3, to);
+            ADTSolver sol (exp, assumptionsTmp, constructors, maxDepth, maxGrow, mergingIts, earlySplit, false, useZ3, to, nestedLevel+1);
             if (sol.solveNoind(false))
             {
               if (verbose) if (exp) outs () << string(sp, ' ')  << "proven by induction: " << *exp << "\n";

@@ -29,7 +29,6 @@ namespace ufo
     Expr createNewApp(HornRuleExt chc, int i, int ind) {
       ExprVector types;
       ExprVector newVars;
-      types.push_back(bind::typeOf(chc.srcVars[i][ind]));
       for(int j = 0; j < chc.srcRelations[i]->arity() - 2; ++j) {
         if (j != ind) {
           Expr e = chc.srcRelations[i]->arg(j);
@@ -37,6 +36,7 @@ namespace ufo
           newVars.push_back(chc.srcVars[i][j]);
         }
       }
+      types.push_back(bind::typeOf(chc.srcVars[i][ind]));
       Expr rel = bind::fdecl (efac.mkTerm(chc.srcRelations[i]->left()->op()), types);
       Expr app = bind::fapp (rel, newVars);
       return app;
@@ -127,13 +127,13 @@ namespace ufo
       size_t ind = values_inds[chc.dstRelation->left()];
       ExprVector types;
       ExprVector newVars;
-      types.push_back(bind::typeOf(chc.dstVars[ind]));
       for(int j = 0; j < chc.dstRelation->arity() - 2; ++j) {
         if (j != ind) {
           types.push_back(bind::typeOf(chc.dstVars[j]));
           newVars.push_back(chc.dstVars[j]);
         }
       }
+      types.push_back(bind::typeOf(chc.dstVars[ind]));
       Expr rel = bind::fdecl (efac.mkTerm(chc.dstRelation->left()->op()), types);
       Expr baseApp = bind::fapp (rel, newVars);
       Expr destination = mk<EQ>(baseApp, chc.dstVars[ind]);
@@ -248,29 +248,17 @@ namespace ufo
             }
           }
 
-          outs() << "goal1: " << *mk<IMPL>(conjoin(cnj, efac), destination) << "\n";
           Expr goal = replaceAll(mk<IMPL>(conjoin(cnj, efac), destination), matching);
-          outs() << "goal2: " << *goal << "\n";
           matching.clear();
           Expr left = goal->left();
 
           findMatchingFromLeftSide(left, matching);
           goal = replaceAll(goal, matching);
-          outs() << "goal3: " << *goal << "\n";
-          goal = simplifyArithm(goal);
+//          goal = simplifyArithm(goal);
           goal = simplifyBool(goal);
-          if (goal->arity() > 0) {
-            goal = createQuantifiedFormula(goal, constructors);
-          }
           ExprVector current_assumptions = assumptions;
-          outs() << "print assumptions: " << "\n";
-          for (auto & a : current_assumptions) {
-            outs() << *a << "\n";
-          }
-          outs() << "goal:\n" << *goal << "\n\n";
-
-          ADTSolver sol (goal, current_assumptions, constructors);
-          if (!sol.solve()) return false;
+          if (!prove (current_assumptions, goal))
+            return false;
         }
         else {
           ExprVector cnj;
@@ -287,14 +275,8 @@ namespace ufo
           goal = simplifyArithm(goal);
           goal = simplifyBool(goal);
           ExprVector current_assumptions = assumptions;
-
-          outs() << "\nprint assumptions: " << "\n";
-          for (auto & a : current_assumptions) {
-            outs() << *a << "\n";
-          }
-          outs() << "goal:\n" << *goal << "\n\n";
-          ADTSolver adtSol (goal, current_assumptions, constructors);
-          if (!adtSol.solveNoind()) return false;
+          if (!prove (current_assumptions, goal))
+            return false;
         }
       }
       return true;
@@ -357,7 +339,6 @@ namespace ufo
 
       // proving
       for (int i = 0; i < chcs.size(); i++){
-        auto &hr = chcs[i];
         if (!checkCHC(chcs[i])) return false;
       }
       sim.printSol();

@@ -240,7 +240,6 @@ namespace ufo
 
         Expr body = r->arg(0);
         Expr head = r->arg(1);
-
         vector<ExprVector> origSrcSymbs;
         ExprSet lin;
         preprocess(body, hr.locVars, origSrcSymbs, hr.srcRelations, lin);
@@ -291,12 +290,6 @@ namespace ufo
         allOrigSymbs.insert(allOrigSymbs.end(), origDstSymbs.begin(), origDstSymbs.end());
         //simplBoolReplCnj(allOrigSymbs, lin); // perhaps, not a very important optimization now; consider removing
         hr.body = conjoin(lin, m_efac);
-        if (isOpX<TRUE>(hr.body) || (hr.srcRelations.size() == 0 && hr.isQuery))
-        {
-          extras.push_back(r1);
-          chcs.pop_back();
-          continue;
-        }
 
         vector<ExprVector> tmp;
         // we may have several applications of the same predicate symbol in the body:
@@ -324,6 +317,13 @@ namespace ufo
         }
         hr.assignVarsAndRewrite (origSrcSymbs, tmp,
                                  origDstSymbs, invVars[hr.dstRelation]);
+
+        if (isOpX<TRUE>(hr.body) || (hr.srcRelations.size() == 0 && hr.isQuery))
+        {
+          extras.push_back(r1);
+          chcs.pop_back();
+          continue;
+        }
 
         hr.body = simpleQE(hr.body, hr.locVars);
         ExprVector body_vars;
