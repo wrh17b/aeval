@@ -828,7 +828,7 @@ namespace ufo
 
               if (verbose) outs() << string(sp, ' ') << "{\n";
               sp += 2;
-              tmpres = rewriteAssumptions(s);   // recursive call
+              tmpres= rewriteAssumptions(s);   // recursive call
               sp -= 2;
               if (verbose) outs() << string(sp, ' ') << "}\n";
 
@@ -1482,6 +1482,7 @@ namespace ufo
         // always add symmetric IH?
         insertSymmetricAssumption(a);
       }
+
 
       // prove the inductive step
       Expr indConsApp = bind::fapp(indConstructor, args);
