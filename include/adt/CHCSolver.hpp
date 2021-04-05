@@ -195,7 +195,7 @@ namespace ufo
                 destination = mkNeg(chc.body->arg(j));
               }
               else {
-                  cnj.push_back(chc.body->arg(j));
+                cnj.push_back(chc.body->arg(j));
               }
             }
           }
@@ -312,8 +312,8 @@ namespace ufo
               for(int j = 0; j < chc.body->arity(); ++j) {
                 Expr body_elem = chc.body->arg(j);
                 if (isOpX<EQ>(body_elem)) {
-                  if (body_elem->left() == chc.dstVars[i] && body_elem->right()->arity() == 1 || 
-                    body_elem->right() == chc.dstVars[i] && body_elem->left()->arity() == 1) {
+                  if ((body_elem->left() == chc.dstVars[i] && body_elem->right()->arity() == 1) ||
+                    (body_elem->right() == chc.dstVars[i] && body_elem->left()->arity() == 1)) {
                     return i;
                   }
                 }
@@ -580,7 +580,7 @@ namespace ufo
     CHCSolver sol (constructors, adts, efac, decls, ruleManager.extras, ruleManager.chcs, 
       givePriorityNonAdt, ignoreBaseVar);
     bool res = containsOp<ARRAY_TY>(conjoin(decls, efac)) ? sol.solveArr() : sol.solve();
-    outs () << (res ? "unsat\n" : "unknown\n");
+    outs () << (res ? "sat\n" : "unknown\n");
   }
 }
 
