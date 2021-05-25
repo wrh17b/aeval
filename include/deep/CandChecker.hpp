@@ -143,7 +143,7 @@ namespace ufo
     CHCs ruleManager(efac, z3);
     ruleManager.parse(string(chcfile));
     Expr cand = mk<TRUE>(efac);
-
+    ruleManager.print();
     HornRuleExt* tr;
     HornRuleExt* fc;
     HornRuleExt* qr;
@@ -255,14 +255,15 @@ namespace ufo
     int iter = 0;
     for (auto & cand : cands)
     {
+      outs () << "iter #" << iter << ", candidate: " << *cand << "\n";
       iter++;
       if (cc.checkInitiation(cand) &&
           cc.checkInductiveness(cand) &&
           cc.checkSafety())
       {
         outs () << "proved\n";
-        outs () << "iter: " << iter << " / " << cands.size() << "\n";
-        cc.serializeInvars();
+        outs () << "total iters: " << iter << " / " << cands.size() << "\n";
+//        cc.serializeInvars();
         return;
       }
     }

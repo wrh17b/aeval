@@ -6,7 +6,6 @@
 // --  used for CL options
 #include "Z3n.hpp"
 
-#include "llvm/Support/raw_ostream.h"
 #include "ufo/ExprLlvm.hpp"
 
 namespace ufo
@@ -18,7 +17,7 @@ namespace ufo
     static z3::ast marshal (Expr e, z3::context &ctx,
 			    C &cache, expr_ast_map &seen)
     {
-      llvm::errs () << "Cannot marshal: " << *e << "\n";
+      errs () << "Cannot marshal: " << *e << "\n";
       assert (0); exit (1);
     }
   };
@@ -29,7 +28,7 @@ namespace ufo
     static Expr unmarshal (const z3::ast &a, ExprFactory &efac,
 			  C &cache, ast_expr_map &seen)
     {
-      llvm::errs () << "Cannot unmarshal: " << lexical_cast<std::string> (a) << "\n";
+      errs () << "Cannot unmarshal: " << lexical_cast<std::string> (a) << "\n";
       assert (0); exit (1);
     }
 
@@ -232,28 +231,24 @@ namespace ufo
       /** quantifier */
       else if (isOpX<FORALL> (e) || isOpX<EXISTS> (e))
       {
-        unsigned num_bound = bind::numBound (e);
-        z3::ast_vector pinned (ctx);
-        pinned.resize (num_bound);
-        std::vector<Z3_sort> bound_sorts;
-        bound_sorts.reserve (num_bound);
-        std::vector<Z3_symbol> bound_names;
-        bound_names.reserve (num_bound);
-        
-        for (unsigned i = 0; i < num_bound; ++i)
-        {
-          z3::ast z (marshal (bind::decl (e, i), ctx, cache, seen));
-          pinned.push_back (z);
-          
-          Z3_func_decl decl = Z3_to_func_decl (ctx, z);
-          bound_sorts.push_back (Z3_get_range (ctx, decl));
-          bound_names.push_back (Z3_get_decl_name (ctx, decl));
-        }
-        
-        
-        z3::ast body (marshal (bind::body (e), ctx, cache, seen));
-        res = Z3_mk_quantifier (ctx, isOpX<FORALL> (e), 0, 0, NULL,
-                                num_bound, &bound_sorts[0], &bound_names[0], body);
+        ExprVector vars;
+        for (int i = 0; i < e->arity() - 1; i++)
+          vars.push_back(bind::fapp(e->arg(i)));
+
+        z3::ast ast (marshal (e->last(), ctx, cache, seen)); //z3.toAst (e->last()));
+        std::vector<Z3_app> bound;
+        bound.reserve (boost::size (vars));
+        for (const Expr &v : vars)
+          bound.push_back (Z3_to_app (ctx, marshal (v, ctx, cache, seen)));
+
+        if (isOpX<FORALL> (e))
+          res = Z3_mk_forall_const (ctx, 0,
+                                          bound.size (), &bound[0],
+                                          0, NULL, ast);
+        else
+          res = Z3_mk_exists_const (ctx, 0,
+                                       bound.size (), &bound[0],
+                                         0, NULL, ast);
       }
 
       // -- cache the result for unmarshaling
@@ -446,7 +441,7 @@ namespace ufo
       }
       else if (isOpX<BEXTRACT> (e))
       {
-        // assert (bv::high (e) > bv::low (e));
+//        assert (bv::high (e) > bv::low (e));
         z3::ast a (ctx, marshal (bv::earg (e), ctx, cache, seen));
         res = Z3_mk_extract (ctx, bv::high (e), bv::low (e), a);
       }
@@ -798,6 +793,9 @@ namespace ufo
 	  break;
         case Z3_OP_REM:
           e = mknary<REM> (args.begin (), args.end ());
+          break;
+        case Z3_OP_DISTINCT:
+          e = mknary<NEQ> (args.begin(), args.end());
           break;
         case Z3_OP_CONST_ARRAY:
           {

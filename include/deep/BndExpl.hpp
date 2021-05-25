@@ -2,8 +2,8 @@
 #define BNDEXPL__HPP__
 
 #include "Horn.hpp"
-#include "Distribution.hpp"
 #include "ae/AeValSolver.hpp"
+#include <limits>
 
 using namespace std;
 using namespace boost;
@@ -34,20 +34,7 @@ namespace ufo
     BndExpl (CHCs& r, Expr lms) :
       m_efac(r.m_efac), ruleManager(r), u(m_efac), extraLemmas(lms) {}
 
-    void guessRandomTrace(vector<int>& trace)
-    {
-      std::srand(std::time(0));
-      Expr curRel = mk<TRUE>(m_efac);
-
-      while (curRel != ruleManager.failDecl)
-      {
-        int range = ruleManager.outgs[curRel].size();
-        int chosen = guessUniformly(range);
-        int chcId = ruleManager.outgs[curRel][chosen];
-        curRel = ruleManager.chcs[chcId].dstRelation;
-        trace.push_back(chcId);
-      }
-    }
+    map<Expr, ExprSet> concrInvs;
 
     void getAllTraces (Expr src, Expr dst, int len, vector<int> trace, vector<vector<int>>& traces)
     {
@@ -80,26 +67,10 @@ namespace ufo
       if (pr.size() == 0) return mk<TRUE>(m_efac);
 
       Expr pref = toExpr(pr);
-
       ExprSet quantified;
       filter (pref, bind::IsConst(), inserter (quantified, quantified.begin ()));
       for (auto & a : bindVars.back()) quantified.erase(a);
-
-      if (!ruleManager.hasArrays && !findNonlin(pref) &&
-          !containsOp<IDIV>(pref) && !containsOp<MOD>(pref)) // current limitations
-      {
-        if (quantified.size() > 0)
-        {
-          AeValSolver ae(mk<TRUE>(m_efac), pref, quantified);
-          ae.solve();
-          pref = ae.getValidSubset();
-        }
-      }
-      else
-      {
-        pref = simpleQE(pref, quantified, true);
-      }
-
+      pref = simpleQE(pref, quantified);
       return replaceAll(pref, bindVars.back(), ruleManager.chcs[ruleManager.cycles[num][0]].srcVars);
     }
 
@@ -169,13 +140,11 @@ namespace ufo
 
     bool exploreTraces(int cur_bnd, int bnd, bool print = false)
     {
-      bool unsat = true;
+      auto res = false;
       int num_traces = 0;
 
-      if (print) outs () << "Exploring traces (up to bound): 1";     // GF: trace of length 1 is always empty
-      while (unsat && cur_bnd <= bnd)
+      while (cur_bnd <= bnd)
       {
-        if (print) outs () << ", " << cur_bnd;
         vector<vector<int>> traces;
         vector<int> empttrace;
 
@@ -184,16 +153,22 @@ namespace ufo
         for (auto &a : traces)
         {
           num_traces++;
-          unsat = !u.isSat(toExpr(a));
-          if (!unsat) break;
+          res = u.isSat(toExpr(a));
+          if (res == true) break;
         }
+        if (res == true) break;
       }
 
       if (print)
-        outs () << "\nTotal number of traces explored: " << num_traces << "\n\n"
-              << (unsat ? "UNSAT for all traces up to " : "SAT for a trace with ")
-              << (cur_bnd - 1) << " steps\n";
-      return unsat;
+      {
+        if (res == false)
+          outs () << "Success after complete unrolling (" << (cur_bnd - 1)<< " step)\n";
+        else if (res == true)
+          outs () << "Counterexample of length " << (cur_bnd - 1) << " found\n";
+        else
+          outs () << "Unknown\n";
+      }
+      return (res == false);
     }
 
     bool kIndIter(int bnd1, int bnd2)
@@ -201,7 +176,7 @@ namespace ufo
       assert (bnd1 <= bnd2);
       assert (bnd2 > 1);
       bool init = exploreTraces(bnd1, bnd2);
-      if (!init)
+      if (init)
       {
         outs() << "Base check failed at step " << bnd2 << "\n";
         exit(0);
@@ -238,7 +213,7 @@ namespace ufo
       for (int i = 1; i < bnd2; i++) gen_trace.push_back(k_ind);
       gen_trace.push_back(pr_ind);
       Expr q = toExpr(gen_trace);
-      bool res = !u.isSat(q);
+      bool res = bool(!u.isSat(q));
 
       if (bnd2 == 2) inv = mkNeg(pr.body);
 
@@ -306,57 +281,238 @@ namespace ufo
       return itp;
     }
 
-    //used for multiple loops to unroll inductive clauses k times and collect corresponding models
-    bool unrollAndExecuteMultiple(ufo::ZSolver<ufo::EZ3> & m_smt_solver,
-				  map<Expr, vector<vector<int> > > & models, int k = 10)
+    // used for a loop and a splitter
+    bool unrollAndExecuteSplitter(
+          Expr srcRel,
+          ExprVector& srcVars,
+				  vector<vector<double> >& models,
+          Expr splitter, Expr invs, int k = 10)
     {
+      assert (splitter != NULL);
+
+      // helper var
+      string str = to_string(numeric_limits<double>::max());
+      str = str.substr(0, str.find('.'));
+      cpp_int max_double = lexical_cast<cpp_int>(str);
+
       for (int i = 0; i < ruleManager.cycles.size(); i++)
       {
+        vector<int> mainInds;
+        vector<int> arrInds;
         auto & loop = ruleManager.cycles[i];
-        Expr srcRel = ruleManager.chcs[loop[0]].srcRelation;
-        if (models[srcRel].size() > 0) continue;
-        bool toContinue = false;
-        for (auto & v : ruleManager.chcs[loop[0]].srcVars)
+        if (srcRel != ruleManager.chcs[loop[0]].srcRelation) continue;
+        if (models.size() > 0) continue;
+
+        auto& hr = ruleManager.chcs[loop[0]];
+        ExprVector vars;
+
+        for (int i = 0; i < ruleManager.chcs[loop[0]].srcVars.size(); i++)
         {
-          if (!bind::isIntConst(v))
+          Expr var = ruleManager.chcs[loop[0]].srcVars[i];
+          if (bind::isIntConst(var))
           {
-            toContinue = true;
-            break;
+            mainInds.push_back(i);
+            vars.push_back(var);
+          }
+          else if (isConst<ARRAY_TY> (var) && ruleManager.hasArrays[srcRel])
+          {
+            vars.push_back(mk<SELECT>(var, ruleManager.chcs[loop[0]].srcVars[ruleManager.iterator[srcRel]]));
+            mainInds.push_back(-1);
+            arrInds.push_back(i);
           }
         }
-        if (toContinue) continue;
+
+        if (vars.size() < 2 && i == ruleManager.cycles.size() - 1)
+          continue; // does not make much sense to run with only one var when it is the last cycle
+        srcVars = vars;
 
         auto & prefix = ruleManager.prefixes[i];
         vector<int> trace;
-        ExprSet lastModel;
-        int p = prefix.size();
-
-        while (p > 0)
-        {
-          auto & r = ruleManager.chcs[prefix[--p]];
-          if (models[r.srcRelation].size() > 0)
-          {
-            assert(models[r.srcRelation].back().size() == r.srcVars.size());
-            for (int j = 0; j < r.srcVars.size(); j ++)
-            {
-              Expr val = mk<EQ>(r.srcVars[j], mkTerm (mpz_class (models[r.srcRelation].back()[j]), m_efac));
-              lastModel.insert(val);
-            }
-            break;
-          }
-        }
-        while (p < prefix.size()) trace.push_back(prefix[p++]);
-        int l = trace.size() - 1;
+        int l = 0;                              // starting index (before the loop)
+        if (ruleManager.hasArrays[srcRel]) l++; // first iter is usually useless
 
         for (int j = 0; j < k; j++)
           for (int m = 0; m < loop.size(); m++)
             trace.push_back(loop[m]);
 
+        ExprVector ssa;
+        getSSA(trace, ssa);
+
+        ssa.push_back(mk<AND>(mkNeg(splitter), invs));
+        ssa.push_back(replaceAll(splitter, ruleManager.chcs[loop[0]].srcVars,
+                                 bindVars[0]));
+
+        bindVars.pop_back();
+        int traceSz = trace.size();
+
+        bool toContinue = false;
+        if (!u.isSat(ssa))
+        {
+//          errs () << "Unable to find a suitable unrolling for " << *srcRel << "\n";
+          continue;
+        }
+
+        ExprSet splitterVars;
+        set<int> splitterVarsIndex; // Get splitter vars here
+        {
+          filter(splitter, bind::IsConst(),
+                inserter(splitterVars, splitterVars.begin()));
+          for(auto itr = splitterVars.begin(), end = splitterVars.end(); itr != end; itr++)
+          {
+            splitterVarsIndex.insert(getVarIndex(*itr, ruleManager.chcs[loop[0]].srcVars));
+          }
+        }
+
+        for (; l < bindVars.size(); l = l + loop.size())
+        {
+          vector<double> model;
+//          outs () << "model for " << l << ": [";
+          int ai = 0;
+          bool toSkip = false;
+          SMTUtils u2(m_efac);
+          ExprSet equalities;
+
+          for(auto i: splitterVarsIndex)
+          {
+            Expr srcVar = ruleManager.chcs[loop[0]].srcVars[i];
+            Expr bvar = bindVars[l][i];
+            if (u.isModelSkippable(bvar))
+            {
+              toSkip = true;
+              break;
+            }
+            Expr m = u.getModel(bvar);
+            equalities.insert(mk<EQ>(srcVar, m));
+          }
+          if (toSkip) continue;
+          equalities.insert(splitter);
+
+          if(u2.isSat(equalities)) //exclude models that don't satisfy splitter
+          {
+            vector<double> model;
+
+            for (int i = 0; i < vars.size(); i++) {
+              int var = mainInds[i];
+              Expr bvar;
+              if (var >= 0)
+              {
+                if (ruleManager.hasArrays[srcRel])
+                  bvar = bindVars[l-1][var];
+                else
+                  bvar = bindVars[l][var];
+              }
+              else
+              {
+                bvar = mk<SELECT>(bindVars[l][arrInds[ai]], bindVars[l-1][ruleManager.iterator[srcRel]]);
+                ai++;
+              }
+              if (u.isModelSkippable(bvar))
+              {
+                toSkip = true;
+                break;
+              }
+              Expr m = u.getModel(bvar);
+              double value;
+              if (m == bvar) value = 0;
+              else
+              {
+                if (lexical_cast<cpp_int>(m) > max_double ||
+                    lexical_cast<cpp_int>(m) < -max_double)
+                {
+                  toSkip = true;
+                  break;
+                }
+                value = lexical_cast<double>(m);
+              }
+              model.push_back(value);
+//              outs () << *bvar << " = " << *m << ", ";
+            }
+            if (!toSkip) models.push_back(model);
+          }
+//          else
+//          {
+//            outs () << "   <  skipping  >      ";
+//          }
+//          outs () << "\b\b]\n";
+        }
+      }
+
+      return true;
+    }
+
+    //used for multiple loops to unroll inductive clauses k times and collect corresponding models
+    bool unrollAndExecuteMultiple(
+          map<Expr, ExprVector>& srcVars,
+				  map<Expr, vector<vector<double> > > & models, int k = 10)
+    {
+      // helper var
+      string str = to_string(numeric_limits<double>::max());
+      str = str.substr(0, str.find('.'));
+      cpp_int max_double = lexical_cast<cpp_int>(str);
+
+      map<int, bool> chcsConsidered;
+      map<int, Expr> exprModels;
+
+      for (int i = 0; i < ruleManager.cycles.size(); i++)
+      {
+        vector<int> mainInds;
+        vector<int> arrInds;
+        auto & loop = ruleManager.cycles[i];
+        Expr srcRel = ruleManager.chcs[loop[0]].srcRelation;
+        if (models[srcRel].size() > 0) continue;
+
+        auto& hr = ruleManager.chcs[loop[0]];
+        ExprVector vars;
+        for (int i = 0; i < ruleManager.chcs[loop[0]].srcVars.size(); i++)
+        {
+          Expr var = ruleManager.chcs[loop[0]].srcVars[i];
+          if (bind::isIntConst(var))
+          {
+            mainInds.push_back(i);
+            vars.push_back(var);
+          }
+          else if (isConst<ARRAY_TY> (var) && ruleManager.hasArrays[srcRel])
+          {
+            vars.push_back(mk<SELECT>(var, ruleManager.chcs[loop[0]].srcVars[ruleManager.iterator[srcRel]]));
+            mainInds.push_back(-1);
+            arrInds.push_back(i);
+          }
+        }
+
+        if (vars.size() < 2 && i == ruleManager.cycles.size() - 1)
+          continue; // does not make much sense to run with only one var when it is the last cycle
+        srcVars[srcRel] = vars;
+
+        auto & prefix = ruleManager.prefixes[i];
+        vector<int> trace;
+        Expr lastModel = mk<TRUE>(m_efac);
+
+        for (int p = 0; p < prefix.size(); p++)
+        {
+          if (chcsConsidered[prefix[p]] == true)
+          {
+            Expr lastModelTmp = exprModels[prefix[p]];
+            if (lastModelTmp != NULL) lastModel = lastModelTmp;
+            trace.clear(); // to avoid CHCs at the beginning
+          }
+          trace.push_back(prefix[p]);
+        }
+
+        int l = trace.size() - 1; // starting index (before the loop)
+        if (ruleManager.hasArrays[srcRel]) l++; // first iter is usually useless
+
+        for (int j = 0; j < k; j++)
+          for (int m = 0; m < loop.size(); m++)
+            trace.push_back(loop[m]);
+
+        int backCHC = -1;
         for (int i = 0; i < ruleManager.chcs.size(); i++)
         {
           auto & r = ruleManager.chcs[i];
           if (i != loop[0] && !r.isQuery && r.srcRelation == srcRel)
           {
+            backCHC = i;
+            chcsConsidered[i] = true; // entry condition for the next loop
             trace.push_back(i);
             break;
           }
@@ -365,131 +521,116 @@ namespace ufo
         ExprVector ssa;
         getSSA(trace, ssa);
         bindVars.pop_back();
+        int traceSz = trace.size();
 
-        toContinue = false;
+        bool toContinue = false;
         while (true)
         {
-          if (ssa.size() < 2)
+          if (ssa.size() - loop.size() < 2)
           {
-            outs () << "Unable to find a suitable unrolling for " << *srcRel << "\n";
+            errs () << "Unable to find a suitable unrolling for " << *srcRel << "\n";
             toContinue = true;
             break;
           }
 
-          m_smt_solver.reset();
-          m_smt_solver.assertExpr(conjoin(lastModel, m_efac));
-          m_smt_solver.assertExpr(conjoin(ssa, m_efac));
-
-          if (m_smt_solver.solve())
+          if (u.isSat(lastModel, conjoin(ssa, m_efac)))
           {
-            break;
+            if (backCHC != -1 && trace.back() != backCHC &&
+                trace.size() != traceSz - 1) // finalizing the unrolling (exit CHC)
+            {
+              trace.push_back(backCHC);
+              ssa.clear();                           // encode from scratch
+              getSSA(trace, ssa);
+              bindVars.pop_back();
+            }
+            else break;
           }
           else
           {
-            ssa.pop_back();
-            bindVars.pop_back();
+            if (trace.size() == traceSz)
+            {
+              trace.pop_back();
+              ssa.pop_back();
+              bindVars.pop_back();
+            }
+            else
+            {
+              trace.resize(trace.size()-loop.size());
+              ssa.resize(ssa.size()-loop.size());
+              bindVars.resize(bindVars.size()-loop.size());
+            }
           }
         }
 
         if (toContinue) continue;
 
-        ZSolver<EZ3>::Model m = m_smt_solver.getModel();
+        map<int, ExprSet> ms;
 
         for (; l < bindVars.size(); l = l + loop.size())
         {
-          auto & vars = bindVars[l];
-          vector<int> model;
-//          outs () << "model for " << l << ": ";
-          for (auto var : vars) {
-            int value;
-            if (var != m.eval(var)) {
-              stringstream tmpstream;
-              tmpstream << m.eval(var);
-              tmpstream >> value;
-            } else {
-              value = guessUniformly(1000)-500;
-              cout << "random guess for: " << var << endl; //DEBUG
+          vector<double> model;
+//          outs () << "model for " << l << ": [";
+          int ai = 0;
+          bool toSkip = false;
+          for (int i = 0; i < vars.size(); i++) {
+            int var = mainInds[i];
+            Expr bvar;
+            if (var >= 0)
+            {
+              if (ruleManager.hasArrays[srcRel])
+                bvar = bindVars[l-1][var];
+              else
+                bvar = bindVars[l][var];
+            }
+            else
+            {
+              bvar = mk<SELECT>(bindVars[l][arrInds[ai]], bindVars[l-1][ruleManager.iterator[srcRel]]);
+              ai++;
+            }
+            if (u.isModelSkippable(bvar))
+            {
+              toSkip = true;
+              break;
+            }
+            Expr m = u.getModel(bvar);
+            if (var >= 0 && m != bvar) ms[var].insert(mk<EQ>(vars[var], m));
+
+            double value;
+            if (m == bvar) value = 0;
+            else
+            {
+              if (lexical_cast<cpp_int>(m) > max_double ||
+                  lexical_cast<cpp_int>(m) < -max_double)
+              {
+                toSkip = true;
+                break;
+              }
+              value = lexical_cast<double>(m);
             }
             model.push_back(value);
-//             outs () << *var << " = " << value << ", ";
+//            outs () << *bvar << " = " << *m << ", ";
           }
-//          outs () << "\b\b]\n";
-          models[srcRel].push_back(model);
-        }
-      }
-
-      return true;
-    }
-
-    bool unrollAndExecute(const Expr & invRel, ufo::ZSolver<ufo::EZ3> & m_smt_solver, vector<vector<int> > & models, int k = 10, Expr initCondn = nullptr)
-    {
-
-      int initIndex;
-      int trIndex;
-      bool initFound = false;
-
-      for (int i = 0; i < ruleManager.chcs.size(); i++) {
-        auto & r = ruleManager.chcs[i];
-        if (r.isFact) {
-          initIndex = i;
-          initFound = true;
-        }
-        if (r.isInductive && r.srcRelation == invRel && r.dstRelation == invRel) {
-          trIndex = i;
-        }
-      }
-
-      if (!initFound && initCondn == nullptr) {
-        cout << "ERR: init not found for given transition (index: " << trIndex << ")" << endl;
-        return false;
-      }
-      
-      Expr init = initCondn == nullptr ? ruleManager.chcs[initIndex].body : initCondn;
-
-      HornRuleExt& tr = ruleManager.chcs[trIndex];
-
-      for (int i = 0; i < tr.srcVars.size(); i++) {
-        init = replaceAll(init, tr.dstVars[i], tr.srcVars[i]);
-      }
-
-	
-      vector<int> trace;
-      for (int i = 0; i < k; i++) {
-        trace.push_back(trIndex);
-      }
-
-      Expr unrolledTr = toExpr(trace);
-
-      //      cout << init << " && " << unrolledTr << endl;
-
-      m_smt_solver.reset();
-      m_smt_solver.assertExpr(init);
-      m_smt_solver.assertExpr(unrolledTr);
-
-      if (!m_smt_solver.solve()) {
-        cout << init << " && " << unrolledTr << "\nfound to be unsat\n";
-        return false;
-      }
-
-      ZSolver<EZ3>::Model m = m_smt_solver.getModel();
-      
-      for (auto vars : bindVars) {
-        vector<int> model;
-        for (auto var : vars) {
-          int value;
-          if (var != m.eval(var)) {
-            stringstream tmpstream;
-            tmpstream << m.eval(var);
-            tmpstream >> value;
-          } else {
-            value = guessUniformly(1000)-500;
-            cout << "random guess for: " << var << endl; //DEBUG
+          if (toSkip)
+          {
+//            outs () << "\b\b   <  skipping  >      ]\n";
           }
-          cout << value << "\t";//DEBUG
-          model.push_back(value);
+          else
+          {
+            models[srcRel].push_back(model);
+//            outs () << "\b\b]\n";
+          }
         }
-        cout << endl;//DEBUG
-        models.push_back(model);
+
+        for (auto & a : ms)
+        {
+          concrInvs[srcRel].insert(disjoin(a.second, m_efac));
+        }
+
+        // although we care only about integer variables for the matrix above,
+        // we still keep the entire model to bootstrap the model generation for the next loop
+        if (chcsConsidered[trace.back()])
+          exprModels[trace.back()] = replaceAll(u.getModel(bindVars.back()),
+            bindVars.back(), ruleManager.chcs[trace.back()].srcVars);
       }
 
       return true;

@@ -66,31 +66,6 @@ namespace z3
 
 namespace z3
 {
-  // -- fixedpoint class is missing from z3++.h
-  class fixedpoint : public object
-  {
-    Z3_fixedpoint m_fixedpoint;
-    void init (Z3_fixedpoint f)
-    {
-      m_fixedpoint = f;
-      Z3_fixedpoint_inc_ref (ctx(), f);
-    }
-  public:
-    fixedpoint(context & c):object(c) { init(Z3_mk_fixedpoint(c)); }
-    fixedpoint(context & c, Z3_fixedpoint s):object(c) { init(s); }
-    fixedpoint(fixedpoint const & s):object(s) { init(s.m_fixedpoint); }
-    ~fixedpoint() { Z3_fixedpoint_dec_ref(ctx(), m_fixedpoint); }
-    operator Z3_fixedpoint() const { return m_fixedpoint; }
-    fixedpoint & operator=(fixedpoint const & s) {
-      Z3_fixedpoint_inc_ref(s.ctx(), s.m_fixedpoint);
-      Z3_fixedpoint_dec_ref(ctx(), m_fixedpoint);
-      m_ctx = s.m_ctx;
-      m_fixedpoint = s.m_fixedpoint;
-      return *this;
-    }
-    void set(params const & p)
-    { Z3_fixedpoint_set_params(ctx(), m_fixedpoint, p); check_error(); }
-  };
     
     class ast_map : public object {
         Z3_ast_map m_map;
@@ -198,8 +173,14 @@ namespace ufo
   {
     z3::context &ctx = z3.get_ctx ();
 
-    z3::ast ast (ctx, Z3_parse_smtlib2_string (ctx, smt.c_str (),
-					       0, NULL, NULL, 0, NULL, NULL));
+    Z3_ast_vector b = Z3_parse_smtlib2_string (ctx, smt.c_str (), 0, NULL, NULL, 0, NULL, NULL);
+    Z3_ast* args = new Z3_ast[Z3_ast_vector_size(ctx, b)];
+    
+    for (unsigned i = 0; i < Z3_ast_vector_size(ctx, b); ++i) {
+      args[i] = Z3_ast_vector_get(ctx, b, i);
+    }
+    
+    z3::ast ast (ctx, Z3_mk_and(ctx, Z3_ast_vector_size(ctx, b), args));
     ctx.check_error ();
     return z3.toExpr (ast);
   }
@@ -208,8 +189,15 @@ namespace ufo
   Expr z3_from_smtlib_file (Z &z3, const char *fname)
   {
     z3::context &ctx = z3.get_ctx ();
-    z3::ast ast (ctx, Z3_parse_smtlib2_file (ctx, fname,
-                                             0, NULL, NULL, 0, NULL, NULL));
+
+    Z3_ast_vector b = Z3_parse_smtlib2_file (ctx, fname, 0, NULL, NULL, 0, NULL, NULL);
+    Z3_ast* args = new Z3_ast[Z3_ast_vector_size(ctx, b)];
+    
+    for (unsigned i = 0; i < Z3_ast_vector_size(ctx, b); ++i) {
+      args[i] = Z3_ast_vector_get(ctx, b, i);
+    }
+    
+    z3::ast ast (ctx, Z3_mk_and(ctx, Z3_ast_vector_size(ctx, b), args));
     ctx.check_error ();
     return z3.toExpr (ast);
   }
@@ -323,11 +311,14 @@ namespace ufo
       Z3_func_decl fdecl = Z3_get_app_decl (ctx, app);
       if (seen.count (fdecl) > 0) return;
 
-      if (Z3_get_decl_kind (ctx, fdecl) == Z3_OP_UNINTERPRETED)
-	seen.insert (fdecl);
+      if (Z3_get_decl_kind (ctx, fdecl) == Z3_OP_UNINTERPRETED &&
+          Z3_get_domain_size (ctx, fdecl) == 0)
+  seen.insert (fdecl);
 
       for (unsigned i = 0; i < Z3_get_app_num_args (ctx, app); i++)
-	allDecls (Z3_get_app_arg (ctx, app, i), seen);
+      {
+        allDecls (Z3_get_app_arg (ctx, app, i), seen);
+      }
     }
 
 
@@ -351,7 +342,7 @@ namespace ufo
       z3::ast a (toAst (e));
       allDecls (static_cast<Z3_ast>(a), seen);
       for (Z3_func_decl fdecl : seen)
-	out << Z3_func_decl_to_string (ctx, fdecl) << "\n";
+        out << Z3_func_decl_to_string (ctx, fdecl) << "\n";
       return out.str ();
     }
 
@@ -462,8 +453,7 @@ namespace ufo
     
     Expr eval (Expr e, bool completion = false)
     {
-      if (!model) return NULL;
-
+      assert (model);
       z3::ast ast (z3.toAst (e));
 
       Z3_ast raw_val = NULL;
@@ -544,6 +534,13 @@ namespace ufo
     ZSolver (Z &z, const char *logic) :
       z3(z), ctx (z.get_ctx ()), solver (z.get_ctx (), logic), efac (z.get_efac ()) {}
 
+    ZSolver (Z &z, unsigned to) :
+    z3(z), ctx (z.get_ctx ()), solver (z.get_ctx ()), efac (z.get_efac ()) {
+      ZParams<Z> p(z);
+      p.set("timeout", to);
+      solver.set(p);
+    }
+
     Z& getContext () {return z3;}
     void set (const ZParams<Z> &p) { solver.set (p); }
 
@@ -561,7 +558,7 @@ namespace ufo
     {
       ExprVector asserts;
       assertions (std::back_inserter (asserts));
-      out << z3.toSmtLibDecls (asserts); // HACK for KIND benchs
+      out << z3.toSmtLibDecls (asserts);
       out << "\n";
       for (const Expr &a : asserts)
         out << "(assert " << z3.toSmtLib (a) << ")\n";
@@ -831,59 +828,58 @@ namespace ufo
     {
       for (Expr decl : fp.m_rels)
       {
-        out << fp.z3.toSmtLib (decl) << "\n";
-//        for (unsigned i = 0; i < bind::domainSz (decl); i++)
-//        {
-//          Expr ty = bind::domainTy (decl, i);
-//          if (isOpX<BOOL_TY> (ty)) out << "Bool ";
-//          else if (isOpX<REAL_TY> (ty)) out << "Real ";
-//          else if (isOpX<INT_TY> (ty)) out << "Int ";
-//          else if (isOpX<ARRAY_TY> (ty))
-//          {
-//            out << "(Array ";
-//            if (isOpX<INT_TY> (sort::arrayIndexTy (ty)))
-//            out << "Int ";
-//            else out << "UfoUnknownSort ";
-//            if (isOpX<INT_TY> (sort::arrayValTy (ty)))
-//            out << "Int";
-//            else out << "UfoUnknownSort";
-//            out << ") ";
-//          }
-//
-//          else out << "UfoUnknownSort ";
-//        }
-//        out << ") Bool)\n";
+        out << "(declare-rel " << *bind::fname (decl) << " (";
+        for (unsigned i = 0; i < bind::domainSz (decl); i++)
+        {
+          Expr ty = bind::domainTy (decl, i);
+          if (isOpX<BOOL_TY> (ty)) out << "Bool ";
+          else if (isOpX<REAL_TY> (ty)) out << "Real ";
+          else if (isOpX<INT_TY> (ty)) out << "Int ";
+          else if (isOpX<ARRAY_TY> (ty))
+          {
+            out << "(Array ";
+            if (isOpX<INT_TY> (sort::arrayIndexTy (ty)))
+              out << "Int ";
+            else out << "UfoUnknownSort ";
+            if (isOpX<INT_TY> (sort::arrayValTy (ty)))
+              out << "Int";
+            else out << "UfoUnknownSort";
+            out << ") ";
+          }
+          else out << "UfoUnknownSort ";
+        }
+        out << "))\n";
       }
 
 
-//      for (const Expr &v : fp.getVars ())
-//      {
-//        assert (bind::IsConst() (v));
-//        out << "(declare-var " << fp.z3.toSmtLib (v) << " ";
-//        Expr ty = bind::typeOf (v);
-//        if (isOpX<BOOL_TY> (ty)) out << "Bool ";
-//        else if (isOpX<REAL_TY> (ty)) out << "Real ";
-//        else if (isOpX<INT_TY> (ty)) out << "Int ";
-//        else if (isOpX<ARRAY_TY> (ty))
-//        {
-//          out << "(Array ";
-//          if (isOpX<INT_TY> (sort::arrayIndexTy (ty)))
-//            out << "Int ";
-//          else out << "UfoUnknownSort ";
-//          if (isOpX<INT_TY> (sort::arrayValTy (ty)))
-//            out << "Int";
-//          else out << "UfoUnknownSort";
-//          out << ") ";
-//        }
-//        else out << "UfoUnknownSort ";
-//        out << ")\n";
-//      }
-//
-//      for (Expr &rule : fp.m_rules)
-//  out << "(rule " << fp.z3.toSmtLib (rule) << ")\n";
-//
-//      for (auto q: fp.m_queries)
-//  out << "(query " << fp.z3.toSmtLib (q) << ")\n";
+      for (const Expr &v : fp.getVars ())
+      {
+        assert (bind::IsConst() (v));
+        out << "(declare-var " << fp.z3.toSmtLib (v) << " ";
+        Expr ty = bind::typeOf (v);
+        if (isOpX<BOOL_TY> (ty)) out << "Bool ";
+        else if (isOpX<REAL_TY> (ty)) out << "Real ";
+        else if (isOpX<INT_TY> (ty)) out << "Int ";
+        else if (isOpX<ARRAY_TY> (ty))
+        {
+          out << "(Array ";
+          if (isOpX<INT_TY> (sort::arrayIndexTy (ty)))
+            out << "Int ";
+          else out << "UfoUnknownSort ";
+          if (isOpX<INT_TY> (sort::arrayValTy (ty)))
+            out << "Int";
+          else out << "UfoUnknownSort";
+          out << ") ";
+        }
+        else out << "UfoUnknownSort ";
+        out << ")\n";
+      }
+
+      for (Expr &rule : fp.m_rules)
+	out << "(rule " << fp.z3.toSmtLib (rule) << ")\n";
+
+      for (auto q: fp.m_queries)
+	out << "(query " << fp.z3.toSmtLib (q) << ")\n";
       return out;
     }
 
@@ -1014,15 +1010,19 @@ namespace ufo
     void loadFPfromFile(std::string smt){
         z3::ast_vector queries (ctx, Z3_fixedpoint_from_file(ctx, fp, smt.c_str ()));
         ctx.check_error ();
-        
-        z3::ast_vector rules (ctx, Z3_fixedpoint_get_rules(ctx, fp));
-        if (rules.empty()) rules = z3::ast_vector(ctx, Z3_fixedpoint_get_assertions(ctx, fp));
 
-        ExprSet relations;
+        z3::ast_vector rules (ctx, Z3_fixedpoint_get_rules(ctx, fp));
+
         for (unsigned i = 0; i < rules.size (); ++i){
-          Expr rule = z3.toExpr (rules [i]);
-          m_rules.push_back(rule);
+            Expr rule = z3.toExpr (rules [i]);
+            m_rules.push_back(rule);
         }
+
+        for (unsigned i = 0; i < queries.size (); ++i){
+            m_queries.push_back(z3.toExpr (queries [i]));
+        }
+
+        //TODO: vars
     }
   };
 
