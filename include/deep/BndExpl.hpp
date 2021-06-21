@@ -28,8 +28,11 @@ namespace ufo
     Expr inv;   // 1-inductive proof
 
     public:
+      vector<ExprVector> bindVars;
+      ExprVector counterExamples;
 
-    BndExpl (CHCs& r) :
+
+      BndExpl (CHCs& r) :
       m_efac(r.m_efac), ruleManager(r), u(m_efac) {}
 
     BndExpl (CHCs& r, Expr lms) :
@@ -90,7 +93,6 @@ namespace ufo
       return replaceAll(pref, bindVars.back(), ruleManager.chcs[ruleManager.cycles[num][0]].srcVars);
     }
 
-    vector<ExprVector> bindVars;
 
     Expr toExpr(vector<int>& trace)
     {
@@ -113,6 +115,14 @@ namespace ufo
         bindVars2.clear();
         HornRuleExt& hr = ruleManager.chcs[step];
         Expr body = hr.body;
+        if(s==0){
+            for(int c=0;c<counterExamples.size();c++){
+                ExprVector temp;
+                temp.push_back(body);
+                temp.push_back(counterExamples[c]);
+                body=conjoin(temp,m_efac);
+            }
+        }
         if (!hr.isFact && extraLemmas != NULL) body = mk<AND>(extraLemmas, body);
 
         for (int i = 0; i < hr.srcVars.size(); i++)
@@ -138,6 +148,7 @@ namespace ufo
           }
 
           body = replaceAll(body, hr.dstVars[i], bindVars2[i]);
+
         }
 
         for (int i = 0; i < hr.locVars.size(); i++)
@@ -159,7 +170,8 @@ namespace ufo
       bool unsat = true;
       int num_traces = 0;
 
-      while (unsat && cur_bnd <= bnd)
+
+      while (cur_bnd <= bnd)
       {
         vector<vector<int>> traces;
         vector<int> empttrace;
@@ -170,7 +182,15 @@ namespace ufo
         {
           num_traces++;
           unsat = bool(!u.isSat(toExpr(a)));
-          if (!unsat) break;
+          if (!unsat) {
+              if(print) {
+                  outs () << "Counterexample of length " << (cur_bnd - 1) << " found\n";
+                  Expr uModel = u.getModel(bindVars[0]);
+                  uModel = replaceAll(uModel, bindVars[0], ruleManager.chcs[a[0]].dstVars);
+                  outs() << uModel << '\n';
+                  counterExamples.push_back(mkNeg(uModel));
+              }
+          }
         }
       }
 
@@ -178,8 +198,6 @@ namespace ufo
       {
         if (unsat)
           outs () << "Success after complete unrolling (" << (cur_bnd - 1)<< " step)\n";
-        else
-          outs () << "Counterexample of length " << (cur_bnd - 1) << " found\n";
       }
       return unsat;
     }
