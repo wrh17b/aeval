@@ -277,10 +277,12 @@ namespace ufo
 
         hr.assignVarsAndRewrite (origSrcSymbs, invVars[hr.srcRelation],
                                  origDstSymbs, invVarsPrime[hr.dstRelation]);
+
         if (qeUnsupported(hr.body))
           hr.body = simpleQE(hr.body, hr.locVars);
         else
           hr.body = eliminateQuantifiers(hr.body, hr.locVars);
+
 
         hr.body = u.removeITE(hr.body);
       }

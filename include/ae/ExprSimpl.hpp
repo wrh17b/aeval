@@ -131,12 +131,10 @@ namespace ufo
 
   inline static void getITEs (Expr a, ExprVector &ites)
   {
-    if (isOpX<ITE>(a)){
+    if (isOpX<ITE>(a))
       ites.push_back(a);
-    } else {
-      for (unsigned i = 0; i < a->arity(); i++)
-        getITEs(a->arg(i), ites);
-    }
+    for (unsigned i = 0; i < a->arity(); i++)
+      getITEs(a->arg(i), ites);
   }
 
   inline static bool isNumeric(Expr a)

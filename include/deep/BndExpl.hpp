@@ -108,13 +108,13 @@ namespace ufo
       ExprVector bindVars1 = ruleManager.chcs[trace[0]].srcVars;
       int bindVar_index = 0;
       int locVar_index = 0;
-
       for (int s = 0; s < trace.size(); s++)
       {
         auto &step = trace[s];
         bindVars2.clear();
         HornRuleExt& hr = ruleManager.chcs[step];
         Expr body = hr.body;
+        /*
         if(s==0){
             for(int c=0;c<counterExamples.size();c++){
                 ExprVector temp;
@@ -123,13 +123,18 @@ namespace ufo
                 body=conjoin(temp,m_efac);
             }
         }
-        if (!hr.isFact && extraLemmas != NULL) body = mk<AND>(extraLemmas, body);
-
-        for (int i = 0; i < hr.srcVars.size(); i++)
-        {
-          body = replaceAll(body, hr.srcVars[i], bindVars1[i]);
+         */
+        if(s==0){
+          /*
+            //if(counterExamples.empty())
+            //counterExamples.push_back(body);
+            //body = conjoin(counterExamples,m_efac);
+          */
+            body = mk<AND>(body, conjoin(counterExamples,m_efac));
         }
-
+        if (!hr.isFact && extraLemmas != NULL) body = mk<AND>(extraLemmas, body);
+        for (int i = 0; i < hr.srcVars.size(); i++)
+          body = replaceAll(body, hr.srcVars[i], bindVars1[i]);
         for (int i = 0; i < hr.dstVars.size(); i++)
         {
           bool kept = false;
@@ -146,32 +151,170 @@ namespace ufo
             Expr new_name = mkTerm<string> ("__bnd_var_" + to_string(bindVar_index++), m_efac);
             bindVars2.push_back(cloneVar(hr.dstVars[i],new_name));
           }
-
           body = replaceAll(body, hr.dstVars[i], bindVars2[i]);
-
         }
-
         for (int i = 0; i < hr.locVars.size(); i++)
         {
           Expr new_name = mkTerm<string> ("__loc_var_" + to_string(locVar_index++), m_efac);
           Expr var = cloneVar(hr.locVars[i], new_name);
-
           body = replaceAll(body, hr.locVars[i], var);
         }
-
         ssa.push_back(body);
         bindVars.push_back(bindVars2);
         bindVars1 = bindVars2;
       }
     }
 
+    Expr getTrPlus(ExprVector ites, Expr Tr, ExprVector  & ais){
+      ExprSet iffs;
+      for (int i = 0; i < 2* ites.size(); i++){
+        Expr new_name = mkTerm<string> ("Tr_a_" + to_string(i), m_efac);
+        Expr var = boolConst(new_name);
+        ais.push_back(var);
+        Expr pathCondition;
+        if(i%2==0)
+          pathCondition = ites[i/2];
+        else
+          pathCondition = mk<NEG>(ites[i/2]);
+        iffs.insert(mk<IFF>(var, pathCondition));
+      }
+      iffs.insert(Tr);
+      return conjoin(iffs, m_efac);
+    }
+
+    void testCaseGen(){
+      vector<int> factIndex;
+      vector<int> trIndex;
+      vector<int> trace;
+      ExprVector ites;
+      ExprVector testCases;
+      ExprVector ais;
+      Expr Tr;
+      Expr TrPlus;
+      set<int> cur;
+      ExprSet vals;
+      ExprSet invs;
+      int bnd=1;
+      int n;
+      for(int i=0;i<ruleManager.chcs.size();i++){
+        if(ruleManager.chcs[i].isInductive){
+          trIndex.push_back(i);
+        }else if(ruleManager.chcs[i].isFact){
+          factIndex.push_back(i);
+        }
+      }
+      trace = factIndex;
+      Tr = ruleManager.chcs[trIndex[0]].body;
+      ufo::getITEs(Tr,ites);
+      ExprVector guards;
+      for(auto i: ites) {
+        if(find(guards.begin(),guards.end(),i->left())==guards.end()) {
+          guards.push_back(i->left());
+          outs() << i->left() << "\n";
+        }
+      }
+      n = guards.size();
+      //outs()<<"\n n="<<n<<" guards found\n";
+      for(int i=0;i<2*n;i++) cur.insert(i);
+      TrPlus = getTrPlus(guards,Tr,ais);
+      //outs()<<TrPlus<<'\n';
+      while(! cur.empty()){
+        outs()<<"\n~~~~New Iteration "<<bnd<<" ~~~~~\n";
+        Expr phi = toExpr(trace);
+        //outs()<<phi<<"\n";
+        //replace all src vars from Tr to the las
+        phi=mk<AND>(phi,replaceAll(TrPlus,ruleManager.chcs[trIndex[0]].srcVars,bindVars.back())); //Corresponds to line 9 in algo1
+        //outs()<<phi<<"\n";
+        auto res = u.isSat(phi);
+        if(!res){
+          //outs()<<"\nauto res = u.isSat(phi); !res == true\n";
+          break;
+        }
+        //Todo: Implement Algorithm 1 lines 13-16 (Currently postponed)
+        set<int> toRemove; //Track values to remove from cur, can not modify set while iterating
+        for(auto i : cur){//rewrite with itr -minor
+          res=u.isSat(mk<AND>(phi,ais[i]));
+          if(!res) {
+            //Todo: Implement Algorithm 1 lines 19-21 (Currently postponed)
+            outs()<<"unreachable\n";
+            ExprSet invCand;
+            if(i%2==0) {
+              outs() << '\n' << mk<NEG>(ites[i / 2]->left()) << "\n";
+              invCand=mk<NEG>(ites[i/2]);
+            }
+            else{
+              invCand=mk<NEG>(ites[i/2]);
+              outs()<<'\n'<<ites[i/2]->left()<<"\n";
+            }
+
+
+
+            //Replace dst vars with src vars
+            //that's the invariant to prove or disprove
+            //use freqhorn framework to prove -- RNDLEarnerv3
+
+
+          }else{
+            toRemove.insert(i);
+            Expr uModel = u.getModel(bindVars[0]);
+            uModel = replaceAll(uModel, bindVars[0], ruleManager.chcs[trace[0]].dstVars);
+            testCases.push_back(uModel);
+            outs()<<"\ni="<<i<<"\n"<<uModel<<"\n";
+          }
+        }
+        //Remove i from cur after iterating to avoid data races
+        for(auto i:toRemove) cur.erase(i);
+        toRemove.clear();
+        bnd++;
+        trace.push_back(trIndex[0]);
+      }
+        /*
+         * find all ite in Tr (assume only in Tr)
+         *
+         * call getITEs
+         * int n = vec.size
+         *
+         * create set of int from 0 to 2*n-1
+         * ExprSet vals; //I think
+         * ExprSet invs; //I think
+         *
+         * create TR+ outside of loop - make new fxn for this
+         *
+         * while(cur not empty){
+         *  fill out rest of while loop
+         *  create phi by unroll tr
+         *
+         *  prepare input for toExpr (vector of integers - obtained similar to
+         *  categorizeCHCs. note - store as indexes instead of CHCs)
+         *
+         *   auto res = u.isSat(phi)
+         *
+         *   if(!res) break;
+         *
+         *   lines 13-16 postponed
+         *
+         *   for(auto i : cur){
+         *     res = u.isSat(phi, ai);
+         *     //lines 19 - 22 skipped for now
+         *     if(res){
+         *      remove i from cur
+         *      insert model into set T (set of test cases) -- similar to counterexamples
+         *      }
+         *   }
+         *  bound++
+         *  }
+         */
+    }
+
     bool exploreTraces(int cur_bnd, int bnd, bool print = false)
     {
       bool unsat = true;
       int num_traces = 0;
+      int init_cur_bnd = cur_bnd;
 
 
-      while (cur_bnd <= bnd)
+
+        while (cur_bnd <= bnd)
       {
         vector<vector<int>> traces;
         vector<int> empttrace;
@@ -183,17 +326,20 @@ namespace ufo
           num_traces++;
           unsat = bool(!u.isSat(toExpr(a)));
           if (!unsat) {
+              Expr uModel = u.getModel(bindVars[0]);
+              uModel = replaceAll(uModel, bindVars[0], ruleManager.chcs[a[0]].dstVars);
+              counterExamples.push_back(mkNeg(uModel));
+              Expr temp = conjoin(counterExamples, m_efac);
+              counterExamples.clear();
+              counterExamples.push_back(temp);
               if(print) {
                   outs () << "Counterexample of length " << (cur_bnd - 1) << " found\n";
-                  Expr uModel = u.getModel(bindVars[0]);
-                  uModel = replaceAll(uModel, bindVars[0], ruleManager.chcs[a[0]].dstVars);
                   outs() << uModel << '\n';
-                  counterExamples.push_back(mkNeg(uModel));
               }
+              cur_bnd=init_cur_bnd;
           }
         }
       }
-
       if (print)
       {
         if (unsat)
@@ -675,8 +821,10 @@ namespace ufo
     CHCs ruleManager(m_efac, z3);
     ruleManager.parse(smt);
     BndExpl ds(ruleManager);
-    ds.exploreTraces(bnd1, bnd2, true);
+    //ds.exploreTraces(bnd1, bnd2, true);
+    ds.testCaseGen();
   };
+
 
   inline bool kInduction(CHCs& ruleManager, int bnd)
   {
