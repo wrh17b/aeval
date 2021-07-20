@@ -1,9 +1,13 @@
-#ifndef BNDEXPL__HPP__
-#define BNDEXPL__HPP__
+#ifndef __BNDEXPL_H_INCLUDED__
+#define __BNDEXPL_H_INCLUDED__
+
+//class RndLearnerV3;
+
 
 #include "Horn.hpp"
 #include "Distribution.hpp"
 #include "ae/AeValSolver.hpp"
+//#include "RndLearnerV3.hpp"
 #include <limits>
 
 using namespace std;
@@ -210,7 +214,7 @@ namespace ufo
       for(auto i: ites) {
         if(find(guards.begin(),guards.end(),i->left())==guards.end()) {
           guards.push_back(i->left());
-          outs() << i->left() << "\n";
+          //outs() << i->left() << "\n";
         }
       }
       n = guards.size();
@@ -219,7 +223,7 @@ namespace ufo
       TrPlus = getTrPlus(guards,Tr,ais);
       //outs()<<TrPlus<<'\n';
       while(! cur.empty()){
-        outs()<<"\n~~~~New Iteration "<<bnd<<" ~~~~~\n";
+        //outs()<<"\n~~~~New Iteration "<<bnd<<" ~~~~~\n";
         Expr phi = toExpr(trace);
         //outs()<<phi<<"\n";
         //replace all src vars from Tr to the las
@@ -236,30 +240,28 @@ namespace ufo
           res=u.isSat(mk<AND>(phi,ais[i]));
           if(!res) {
             //Todo: Implement Algorithm 1 lines 19-21 (Currently postponed)
-            outs()<<"unreachable\n";
-            ExprSet invCand;
+            //outs()<<"unreachable\n";
+            Expr invCand;
             if(i%2==0) {
-              outs() << '\n' << mk<NEG>(ites[i / 2]->left()) << "\n";
-              invCand=mk<NEG>(ites[i/2]);
+              //outs() << '\n' << mk<NEG>(ites[i / 2]->left()) << "\n";
+              invCand=(mk<NEG>(ites[i/2]));
             }
             else{
-              invCand=mk<NEG>(ites[i/2]);
-              outs()<<'\n'<<ites[i/2]->left()<<"\n";
+              invCand=(mk<NEG>(ites[i/2]));
+              //outs()<<'\n'<<ites[i/2]->left()<<"\n";
             }
-
-
-
             //Replace dst vars with src vars
+            invCand = replaceAll(invCand, bindVars[0],ruleManager.chcs[trace[0]].dstVars);
             //that's the invariant to prove or disprove
             //use freqhorn framework to prove -- RNDLEarnerv3
-
+            //RndLearnerV3 ds(m_efac, z3, ruleManager, 1000, false , false ,false, false, false,false);
 
           }else{
             toRemove.insert(i);
             Expr uModel = u.getModel(bindVars[0]);
             uModel = replaceAll(uModel, bindVars[0], ruleManager.chcs[trace[0]].dstVars);
             testCases.push_back(uModel);
-            outs()<<"\ni="<<i<<"\n"<<uModel<<"\n";
+            //outs()<<"\ni="<<i<<"\n"<<uModel<<"\n";
           }
         }
         //Remove i from cur after iterating to avoid data races
@@ -304,6 +306,7 @@ namespace ufo
          *  bound++
          *  }
          */
+        outs()<<testCases.size()<<":";
     }
 
     bool exploreTraces(int cur_bnd, int bnd, bool print = false)
