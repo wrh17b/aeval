@@ -186,7 +186,7 @@ namespace ufo
       return conjoin(iffs, m_efac);
     }
 
-    void testCaseGen(){
+    void testCaseGen(function<bool(void *, Expr)> checkInvariant, void* rndLearner){
       vector<int> factIndex;
       vector<int> trIndex;
       vector<int> trace;
@@ -200,6 +200,7 @@ namespace ufo
       ExprSet invs;
       int bnd=1;
       int n;
+      int invCount=0;
       for(int i=0;i<ruleManager.chcs.size();i++){
         if(ruleManager.chcs[i].isInductive){
           trIndex.push_back(i);
@@ -240,22 +241,28 @@ namespace ufo
           res=u.isSat(mk<AND>(phi,ais[i]));
           if(!res) {
             //Todo: Implement Algorithm 1 lines 19-21 (Currently postponed)
-            //outs()<<"unreachable\n";
             Expr invCand;
             if(i%2==0) {
               //outs() << '\n' << mk<NEG>(ites[i / 2]->left()) << "\n";
-              invCand=(mk<NEG>(ites[i/2]));
+              invCand=(mk<NEG>(ites[i/2]->left()));
             }
             else{
-              invCand=(mk<NEG>(ites[i/2]));
-              //outs()<<'\n'<<ites[i/2]->left()<<"\n";
+              invCand=ites[i/2]->left();
+
             }
             //Replace dst vars with src vars
-            invCand = replaceAll(invCand, bindVars[0],ruleManager.chcs[trace[0]].dstVars);
+            //invCand = replaceAll(invCand,ruleManager.chcs[trIndex[0]].dstVars, ruleManager.chcs[trIndex[0]].srcVars);
             //that's the invariant to prove or disprove
             //use freqhorn framework to prove -- RNDLEarnerv3
             //RndLearnerV3 ds(m_efac, z3, ruleManager, 1000, false , false ,false, false, false,false);
-
+            if(hasOnlyVars(invCand, ruleManager.chcs[trIndex[0]].srcVars)) {
+              bool isInv = checkInvariant(rndLearner, invCand);
+              if (isInv) {
+                toRemove.insert(i);
+                invCount++;
+                //outs() << "Invariant: " << invCand << "\n";
+              }
+            }
           }else{
             toRemove.insert(i);
             Expr uModel = u.getModel(bindVars[0]);
@@ -270,43 +277,7 @@ namespace ufo
         bnd++;
         trace.push_back(trIndex[0]);
       }
-        /*
-         * find all ite in Tr (assume only in Tr)
-         *
-         * call getITEs
-         * int n = vec.size
-         *
-         * create set of int from 0 to 2*n-1
-         * ExprSet vals; //I think
-         * ExprSet invs; //I think
-         *
-         * create TR+ outside of loop - make new fxn for this
-         *
-         * while(cur not empty){
-         *  fill out rest of while loop
-         *  create phi by unroll tr
-         *
-         *  prepare input for toExpr (vector of integers - obtained similar to
-         *  categorizeCHCs. note - store as indexes instead of CHCs)
-         *
-         *   auto res = u.isSat(phi)
-         *
-         *   if(!res) break;
-         *
-         *   lines 13-16 postponed
-         *
-         *   for(auto i : cur){
-         *     res = u.isSat(phi, ai);
-         *     //lines 19 - 22 skipped for now
-         *     if(res){
-         *      remove i from cur
-         *      insert model into set T (set of test cases) -- similar to counterexamples
-         *      }
-         *   }
-         *  bound++
-         *  }
-         */
-        outs()<<testCases.size()<<":";
+        outs()<<testCases.size()<<":"<<invCount;
     }
 
     bool exploreTraces(int cur_bnd, int bnd, bool print = false)
@@ -817,6 +788,7 @@ namespace ufo
     }
   };
 
+
   inline void unrollAndCheck(string smt, int bnd1, int bnd2)
   {
     ExprFactory m_efac;
@@ -824,8 +796,7 @@ namespace ufo
     CHCs ruleManager(m_efac, z3);
     ruleManager.parse(smt);
     BndExpl ds(ruleManager);
-    //ds.exploreTraces(bnd1, bnd2, true);
-    ds.testCaseGen();
+    ds.exploreTraces(bnd1, bnd2, true);
   };
 
 

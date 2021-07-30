@@ -1520,6 +1520,16 @@ namespace ufo
         assert(hasOnlyVars(res, ruleManager.invVars[rel]));
       }
     }
+
+    bool checkInvariant(Expr e){
+      addCandidate(0, e);
+      if (multiHoudini(ruleManager.wtoCHCs)) assignPrioritiesForLearned();
+      return (bool)u.implies(sfs[0].back().getAllLemmas(), e);
+    }
+    static bool checkInvariantStatic(void* arg, Expr e) {
+      RndLearnerV3* that = (RndLearnerV3*)arg;
+      return that->checkInvariant(e);
+    }
   };
 
   inline void learnInvariants3(string smt, unsigned maxAttempts, unsigned to, bool freqs, bool aggp,
@@ -1563,7 +1573,23 @@ namespace ufo
     if (ds.bootstrap(doDisj)) return;
     std::srand(std::time(0));
     ds.synthesize(maxAttempts, doDisj);
+  };
+
+  inline void testCaseGen(string smt)
+  {
+    ExprFactory m_efac;
+    EZ3 z3(m_efac);
+    CHCs ruleManager(m_efac, z3);
+    ruleManager.parse(smt);
+    RndLearnerV3 ds(m_efac, z3, ruleManager, 1000, false, false, false, false, false, false);
+    for (auto& dcl: ruleManager.decls) ds.initializeDecl(dcl);
+    ExprSet cands;
+    for (auto& dcl: ruleManager.decls) ds.doSeedMining(dcl->arg(0), cands, false);
+    ds.calculateStatistics();
+    BndExpl bnd(ruleManager);
+    bnd.testCaseGen(RndLearnerV3::checkInvariantStatic, &ds);
   }
+
 }
 
 #endif

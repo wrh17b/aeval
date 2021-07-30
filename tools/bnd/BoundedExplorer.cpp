@@ -1,4 +1,5 @@
-#include "deep/BndExpl.hpp"
+
+#include "deep/RndLearnerV3.hpp"
 #include <chrono>
 #include <thread>
 #include <mutex>
@@ -39,16 +40,17 @@ int main (int argc, char ** argv)
     outs() << "At least an input file should be given\n";
     return 0;
   }
-/*
+
   int lower = 2;           //default
   int upper = 10000;       //default
 
   if (argc > 2) lower = max(2, atoi(argv[1]));
   if (argc > 3) upper = atoi(argv[2]);
 
-  unrollAndCheck(string(argv[argc-1]), lower, upper);
+  testCaseGen(string(argv[argc-1]));
+  //unrollAndCheck(string(argv[argc-1]), lower, upper);
 
-  */
+  /*
   int lower = 2;           //default
   int upper = 10000;       //default
   string input_file = string(argv[argc-1]);
@@ -67,6 +69,7 @@ int main (int argc, char ** argv)
     outs()<<"0:Timeout";
   else
     outs()<<runtime.count()<<"ms";
+    */
 
 
 

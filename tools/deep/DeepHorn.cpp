@@ -50,6 +50,8 @@ void getStrValues(const char * opt, vector<string> & values, int argc, char ** a
 
 int main (int argc, char ** argv)
 {
+  testCaseGen(string(argv[argc-1]));
+  return 0;
   const char *OPT_HELP = "--help";
   const char *OPT_V1 = "--v1";
   const char *OPT_V2 = "--v2";
